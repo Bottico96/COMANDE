@@ -1565,7 +1565,7 @@ function moveDish(key,dishId,dir){
 }
 
 function archiveDish(key,dishId){
-  if(!confirm('Rimuovere dal menu? Potrai riaggiungerlo dall'archivio.'))return;
+  if(!confirm('Rimuovere dal menu? Potrai riaggiungerlo dall\'archivio.'))return;
   const dishes=state.menus[key]||[];
   const idx=dishes.findIndex(d=>d.id===dishId);
   if(idx<0)return;
@@ -2304,7 +2304,13 @@ function rememberIngredient(nome){
 
 // ── Load from Firestore on boot ────────────────────────
 async function loadFromFirestore(){
-  showToast('⏳ Caricamento dati…', 99999);
+  // Show loading indicator
+  document.body.insertAdjacentHTML('beforeend','<div id="loadingBar" style="position:fixed;top:0;left:0;right:0;height:3px;background:var(--accent);z-index:9999;animation:loadPulse 1s ease-in-out infinite"></div>');
+  if(!document.getElementById('loadStyle')){
+    const s=document.createElement('style');s.id='loadStyle';
+    s.textContent='@keyframes loadPulse{0%,100%{opacity:.4}50%{opacity:1}}';
+    document.head.appendChild(s);
+  }
 
   try{
     // 1. menus
@@ -2334,9 +2340,9 @@ async function loadFromFirestore(){
 
   }catch(e){
     console.error('Firestore load error', e);
-    showToast('⚠️ Errore connessione — lavoro offline', 5000);
   }
 
+  document.getElementById('loadingBar')?.remove();
   document.querySelector('.toast')?.remove();
   initDate();
   renderTavoliPage();
