@@ -205,9 +205,11 @@ header{height:var(--header-h);background:var(--surface);border-bottom:1px solid 
 .ingredient-flags{display:flex;gap:4px;flex-wrap:wrap;padding-top:2px}
 .flag-chip{font-size:10px;padding:2px 8px;border-radius:10px;cursor:pointer;border:1.5px solid;font-weight:500;transition:all .12s;font-family:'DM Sans',sans-serif}
 .flag-chip.allergen{background:transparent;border-color:#f0c8c8;color:var(--danger)}
-.flag-chip.allergen.active{background:#fdf0f0;border-color:var(--danger)}
+.flag-chip.allergen.active{background:#fdf0f0;border-color:var(--danger);box-shadow:0 0 0 2px rgba(139,46,46,.15)}
 .flag-chip.warn{background:transparent;border-color:#f0d0a0;color:var(--orange)}
-.flag-chip.warn.active{background:var(--orange-light);border-color:var(--orange)}
+.flag-chip.warn.active{background:var(--orange-light);border-color:var(--orange);box-shadow:0 0 0 2px rgba(122,58,16,.15)}
+.flag-chip.custom,.flag-chip.diet{background:transparent;border-color:#c0d8c0;color:#2a6b2a}
+.flag-chip.custom.active,.flag-chip.diet.active{background:#e8f4e8;border-color:#2a6b2a;box-shadow:0 0 0 2px rgba(42,107,42,.15)}
 
 /* MODAL */
 .modal-overlay{position:fixed;inset:0;background:rgba(20,18,14,.45);backdrop-filter:blur(4px);z-index:300;display:flex;align-items:center;justify-content:center;padding:20px;animation:fadeIn .18s ease}
@@ -295,11 +297,11 @@ header{height:var(--header-h);background:var(--surface);border-bottom:1px solid 
 .variant-flags{display:flex;gap:4px;flex-wrap:wrap}
 .variant-flag-chip{font-size:10px;padding:2px 8px;border-radius:10px;cursor:pointer;border:1.5px solid;font-weight:500;transition:all .12s;font-family:'DM Sans',sans-serif}
 .variant-flag-chip.allergen{background:transparent;border-color:#f0c8c8;color:var(--danger)}
-.variant-flag-chip.allergen.active{background:#fdf0f0;border-color:var(--danger)}
+.variant-flag-chip.allergen.active{background:#fdf0f0;border-color:var(--danger);box-shadow:0 0 0 2px rgba(139,46,46,.15)}
 .variant-flag-chip.warn{background:transparent;border-color:#f0d0a0;color:var(--orange)}
-.variant-flag-chip.warn.active{background:var(--orange-light);border-color:var(--orange)}
-.variant-flag-chip.diet{background:transparent;border-color:#c0d8c0;color:#2a6b2a}
-.variant-flag-chip.diet.active{background:#e8f4e8;border-color:#2a6b2a}
+.variant-flag-chip.warn.active{background:var(--orange-light);border-color:var(--orange);box-shadow:0 0 0 2px rgba(122,58,16,.15)}
+.variant-flag-chip.diet,.variant-flag-chip.custom{background:transparent;border-color:#c0d8c0;color:#2a6b2a}
+.variant-flag-chip.diet.active,.variant-flag-chip.custom.active{background:#e8f4e8;border-color:#2a6b2a;box-shadow:0 0 0 2px rgba(42,107,42,.15)}
 /* variant badge shown in dish list */
 .variant-pill{display:inline-flex;align-items:center;font-size:10px;padding:2px 8px;border-radius:10px;background:var(--gold-light);color:var(--gold);border:1px solid #e0c878;font-weight:500;white-space:nowrap}
 
@@ -1812,6 +1814,7 @@ function buildComponentHTML(c,ci){
   const compVars=c.compVariants||[];
   const compVarsHTML=compVars.map((cv,cvi)=>{
     if(!cv.ingredients)cv.ingredients=[];
+    if(!cv.flags)cv.flags=[];
     const cvIngsHTML=cv.ingredients.map((ing,ii)=>{
       const rem=ing.removability||'fondamentale';
       const remLabel={'fondamentale':'🔒','modificabile':'✏️','opzionale':'✂️'}[rem];
@@ -1953,6 +1956,7 @@ function removeCompVariant(ci,cvi){
 }
 function toggleCompVariantFlag(ci,cvi,flagId){
   const cv=state.dishComponents[ci].compVariants[cvi];
+  if(!cv.flags)cv.flags=[];
   const idx=cv.flags.indexOf(flagId);
   if(idx>=0)cv.flags.splice(idx,1);else cv.flags.push(flagId);
   renderComponentsList();
