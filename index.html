@@ -1751,7 +1751,7 @@ function renderComponentsList(){
         if(!val)return;
         const ci=+inp.dataset.ci,cvi=+inp.dataset.cvi;
         if(!state.dishComponents[ci].compVariants[cvi].ingredients)state.dishComponents[ci].compVariants[cvi].ingredients=[];
-        state.dishComponents[ci].compVariants[cvi].ingredients.push({nome:val,flags:[]});
+        state.dishComponents[ci].compVariants[cvi].ingredients.push({nome:val,flags:[],removability:'fondamentale'});
         rememberIngredient(val);
         inp.value='';
         renderComponentsList();
@@ -1796,11 +1796,18 @@ function buildComponentHTML(c,ci){
   const compVars=c.compVariants||[];
   const compVarsHTML=compVars.map((cv,cvi)=>{
     if(!cv.ingredients)cv.ingredients=[];
-    const cvIngsHTML=cv.ingredients.map((ing,ii)=>`
-      <span class="ingredient-chip" style="font-size:11px;padding:3px 8px">
-        ${esc(ing.nome)}
-        <button type="button" onclick="removeCompVariantIng(${ci},${cvi},${ii})" style="background:none;border:none;cursor:pointer;color:var(--text-muted);font-size:11px;padding:0;line-height:1">×</button>
-      </span>`).join('');
+    const cvIngsHTML=cv.ingredients.map((ing,ii)=>{
+      const rem=ing.removability||'fondamentale';
+      const remLabel={'fondamentale':'🔒','modificabile':'✏️','opzionale':'✂️'}[rem];
+      const remCls={'fondamentale':'','modificabile':'has-warn','opzionale':''}[rem];
+      return `<span class="ingredient-chip ${remCls}" style="font-size:11px;padding:4px 8px;flex-direction:column;gap:2px;align-items:flex-start">
+        <span style="display:flex;align-items:center;gap:4px">
+          <button type="button" onclick="cycleCompVariantIngRem(${ci},${cvi},${ii})" title="Clicca per cambiare rimuovibilità" style="background:none;border:none;cursor:pointer;padding:0;font-size:11px;line-height:1">${remLabel}</button>
+          <span>${esc(ing.nome)}</span>
+          <button type="button" onclick="removeCompVariantIng(${ci},${cvi},${ii})" style="background:none;border:none;cursor:pointer;color:var(--text-muted);font-size:12px;padding:0;line-height:1;margin-left:2px">×</button>
+        </span>
+      </span>`;
+    }).join('');
     const cvFlagsHTML=allQuickFlags.map(f=>{
       const active=(cv.flags||[]).includes(f.id);
       return `<button class="variant-flag-chip ${f.type==='allergen'?'allergen':f.type==='warn'?'warn':'diet'} ${active?'active':''}" onclick="toggleCompVariantFlag(${ci},${cvi},'${f.id}')" style="font-size:10px;padding:2px 7px">${esc(f.label)}</button>`;
@@ -1913,6 +1920,14 @@ function addCompVariant(ci){
 }
 function removeCompVariantIng(ci,cvi,ii){
   state.dishComponents[ci].compVariants[cvi].ingredients.splice(ii,1);
+  renderComponentsList();
+}
+
+function cycleCompVariantIngRem(ci,cvi,ii){
+  const order=['fondamentale','modificabile','opzionale'];
+  const ing=state.dishComponents[ci].compVariants[cvi].ingredients[ii];
+  const curr=ing.removability||'fondamentale';
+  ing.removability=order[(order.indexOf(curr)+1)%3];
   renderComponentsList();
 }
 
