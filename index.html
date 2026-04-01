@@ -1148,7 +1148,9 @@ function openComanda(tableId){
 
   renderComanda(table);
   document.getElementById('comandaOverlay').classList.remove('hidden');
-  document.getElementById('comandaNotaInput').value=table.comanda.nota||'';
+  // Pre-fill nota from noteGenerali if comanda nota is empty
+  const notaVal = table.comanda.nota || table.noteGenerali || '';
+  document.getElementById('comandaNotaInput').value = notaVal;
 }
 
 function buildComandaFromAI(table){
@@ -1193,7 +1195,7 @@ function buildComandaFromAI(table){
   });
 
   const maxCols=Math.max(...rows.map(r=>r.cols.length),1);
-  return {nota:'', rows, maxCols};
+  return {nota: table.noteGenerali||'', rows, maxCols};
 }
 
 function renderComanda(table){
@@ -2072,8 +2074,7 @@ function renderTagsPage(){
           <input type="text" id="tagPageInput" class="form-input" style="flex:1" placeholder="es. mandorle, agrumi, aceto balsamico…">
           <select id="tagPageType" class="form-select" style="width:140px">
             <option value="allergen">🔴 Allergene</option>
-            <option value="warn">🟠 Attenzione</option>
-            <option value="custom">🔵 Personalizzato</option>
+            <option value="warn">🟡 Gusto</option>
           </select>
           <button class="btn btn-primary btn-sm" onclick="addTagFromPage()">+ Aggiungi</button>
         </div>
@@ -2093,8 +2094,7 @@ function renderTagsPage(){
               <input type="text" value="${esc(f.label)}" class="form-input" style="flex:1;padding:5px 10px;font-size:12px" onchange="renameCustomTag(${fi},this.value)">
               <select class="form-select" style="width:130px;padding:5px 8px;font-size:12px" onchange="retypeCustomTag(${fi},this.value)">
                 <option value="allergen" ${f.type==='allergen'?'selected':''}>🔴 Allergene</option>
-                <option value="warn" ${f.type==='warn'?'selected':''}>🟠 Attenzione</option>
-                <option value="custom" ${f.type==='custom'?'selected':''}>🔵 Personalizzato</option>
+                <option value="warn" ${f.type==='warn'||f.type==='custom'?'selected':''}>🟡 Gusto</option>
               </select>
               <button class="btn btn-danger btn-xs" onclick="removeCustomFlag(${fi});renderTagsPage()">✕</button>
             </div>`).join('')}
@@ -2126,7 +2126,9 @@ function addTagFromPage(){
   if(!val)return;
   if(globalCustomFlags.find(f=>f.label.toLowerCase()===val.toLowerCase())){showToast('⚠️ Tag già esistente');return;}
   const id='cf_'+val.toLowerCase().replace(/\s+/g,'_')+(nextCustomFlagId++);
-  globalCustomFlags.push({id,label:val,type});
+  // Map custom→warn so there's no orphan type
+  const finalType=type==='custom'?'warn':type;
+  globalCustomFlags.push({id,label:val,type:finalType});
   if(inp)inp.value='';
   fbSaveTags();
   renderTagsPage();
