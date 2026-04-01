@@ -640,19 +640,7 @@ header{height:var(--header-h);background:var(--surface);border-bottom:1px solid 
           <span><span class="rb-opzionale removability-badge" style="pointer-events:none">✂️ opzionale</span> — si può togliere</span>
         </div>
       </div>
-      <!-- ── VARIANTI ── -->
-      <div class="form-group" style="background:#f0f1f8;border:1px solid #c4c8e4;border-left:3px solid #5a62b8;border-radius:var(--radius);padding:14px 16px">
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
-          <div>
-            <label class="form-label" style="margin:0;color:#3a42a0">🎭 Varianti del piatto</label>
-            <div class="form-hint" style="margin-top:2px">Stesso piatto adattato — es. no lattosio, vegetariana, vegana. Inseriscile in ordine di priorità (la migliore prima).</div>
-          </div>
-          <button class="btn btn-ghost btn-xs" id="btnAddVariant" style="border-color:#c4c8e4;color:#5a62b8">+ Aggiungi variante</button>
-        </div>
-        <div class="variants-list" id="variantsList"></div>
-      </div>
-    </div>
-    <div class="modal-footer">
+      <div class="modal-footer">
       <button class="btn btn-ghost" id="btnPiattoCancel">Annulla</button>
       <button class="btn btn-primary" id="btnPiattoSave">Salva piatto</button>
     </div>
@@ -743,7 +731,6 @@ const state={
   editingTable:null,
   editingDish:null,
   dishComponents:[],
-  dishVariants:[],
   dragSrc:null,
   comandaTableId:null,
   comandaEditMode:false
@@ -1036,7 +1023,7 @@ ${secondaryCtx}
 REGOLE:
 - Ragiona come cuoco esperto, non keyword matching
 - Se ingrediente non si percepisce (dalle note), non è un problema
-- Gerarchia: 1) ingrediente O si toglie → nota "no X" 2) ingrediente M si adatta 3) variante componente (CV) 4) variante piatto 5) piatto secondario
+- Gerarchia: 1) ingrediente O si toglie → nota "no X" 2) ingrediente M si adatta 3) variante componente (CV) compatibile 4) piatto secondario (stesso menu secondario)
 - Le varianti piatto sono in ORDINE DI PRIORITÀ: scegli sempre la PRIMA variante compatibile nella lista
 - Per gravidanza: crudo (carne/pesce/uova/formaggi crudi), alcol, formaggi molli
 - Buon senso su intensità: tracce non contano, presenza dominante sì
@@ -1584,7 +1571,6 @@ function renderMenuPanel(menuName,type){
   dishes.forEach((d,idx)=>{
     const allFlags=[...new Set(d.components?.flatMap(c=>[...(c.flags||[]),...(c.ingredients?.flatMap(i=>i.flags||[])||[])])||[])];
     const flagHtml=allFlags.map(f=>{const info=getAllFlag(f);const cls=info?.type==='allergen'?'tag-allergen':info?.type==='warn'?'tag-warning':'tag-custom';return `<span class="dish-tag ${cls}">${esc(info?.label||f)}</span>`;}).join('');
-    const variantsHtml=(d.variants||[]).map(v=>`<span class="variant-pill">${esc(v.etichetta||v.nomeCompleto||'v')}</span>`).join('');
     const isFirst=idx===0,isLast=idx===dishes.length-1;
     listHtml+=`<div class="dish-item" draggable="true" data-pos="${d.pos}" data-key="${key}">
       <div style="display:flex;flex-direction:column;gap:2px;flex-shrink:0">
@@ -1596,7 +1582,7 @@ function renderMenuPanel(menuName,type){
         <div class="dish-name">${esc(d.nome)}</div>
         ${d.nomeComanda&&d.nomeComanda!==d.nome?`<div class="dish-desc-short">📋 ${esc(d.nomeComanda)}</div>`:''}
         ${d.components?.length?`<div class="dish-desc-short">${d.components.length} componenti</div>`:''}
-        ${allFlags.length||variantsHtml?`<div class="dish-tags">${flagHtml}${variantsHtml}</div>`:''}
+        \${allFlags.length?`<div class='dish-tags'>\${flagHtml}</div>`:''}
       </div>
       <div class="dish-actions" style="display:flex;gap:5px;flex-shrink:0">
         <button class="btn btn-ghost btn-xs" onclick="openDishModal('${key}','${d.id}')">✏️</button>
@@ -1680,7 +1666,6 @@ let _dishCtx={key:null,id:null,forcedPos:null};
 function openDishModal(key,dishId=null,forcedPos=null){
   _dishCtx={key,id:dishId,forcedPos};
   state.dishComponents=[];
-  state.dishVariants=[];
   document.getElementById('pNome').value='';
   document.getElementById('pNomeComanda').value='';
   document.getElementById('pNoteAI').value='';
@@ -1693,13 +1678,11 @@ function openDishModal(key,dishId=null,forcedPos=null){
       document.getElementById('pNomeComanda').value=d.nomeComanda||'';
       document.getElementById('pNoteAI').value=d.noteAI||'';
       state.dishComponents=(d.components||[]).map(c=>({...c,flags:c.flags||[],compVariants:(c.compVariants||[]).map(cv=>({...cv,flags:[...(cv.flags||[])],ingredients:(cv.ingredients||[])})),ingredients:c.ingredients.map(i=>({...i,flags:[...i.flags]}))}));
-      state.dishVariants=(d.variants||[]).map(v=>({...v,flags:[...v.flags]}));
     }
   }
   document.getElementById('modalPiattoTitle').textContent=dishId?'Modifica piatto':'Nuovo piatto';
   document.getElementById('modalPiattoSubtitle').textContent=`${capitalize(menuName)} — ${type==='titolare'?'Menu Titolare':'Menu Secondario'}${forcedPos?` — Portata ${forcedPos}`:''}`;
   renderComponentsList();
-  renderVariantsList();
   renderCustomFlagsList();
   document.getElementById('modalPiatto').classList.remove('hidden');
   setTimeout(()=>document.getElementById('pNome').focus(),80);
@@ -1982,6 +1965,7 @@ function removeCustomFlag(fi){
   globalCustomFlags.splice(fi,1);
   renderCustomFlagsList();
   renderComponentsList();
+  if(typeof fbSaveTags==='function')fbSaveTags();
 }
 
 document.getElementById('btnAddComponent').addEventListener('click',addComponent);
@@ -2003,76 +1987,6 @@ const VARIANT_FLAGS=[
   {id:'halal',label:'Halal',type:'diet'},
 ];
 
-function renderVariantsList(){
-  const list=document.getElementById('variantsList');
-  if(!state.dishVariants.length){
-    list.innerHTML=`<div style="text-align:center;padding:14px;color:var(--text-muted);font-size:12px;border:2px dashed var(--border);border-radius:var(--radius-sm)">Nessuna variante — il piatto viene servito solo nella versione standard</div>`;
-    return;
-  }
-  list.innerHTML=state.dishVariants.map((v,vi)=>buildVariantHTML(v,vi)).join('');
-  list.querySelectorAll('.variant-name-input').forEach(inp=>{
-    inp.addEventListener('input',e=>{state.dishVariants[+inp.dataset.vi].nomeCompleto=e.target.value;updateVariantPreview(+inp.dataset.vi);});
-  });
-  list.querySelectorAll('.variant-label-input').forEach(inp=>{
-    inp.addEventListener('input',e=>{state.dishVariants[+inp.dataset.vi].etichetta=e.target.value;updateVariantPreview(+inp.dataset.vi);});
-  });
-}
-
-function buildVariantHTML(v,vi){
-  const dishName=document.getElementById('pNome').value.trim()||'[nome piatto]';
-  const preview=v.etichetta?`${dishName} <strong>${esc(v.etichetta)}</strong>`:`${esc(dishName)} <span style="color:var(--text-muted)">[etichetta non definita]</span>`;
-  const allVFlags=[
-    ...VARIANT_FLAGS,
-    ...globalCustomFlags.map(f=>({...f,id:'no_'+f.id,label:'No '+f.label,type:'custom'}))
-  ];
-  const flagsHtml=allVFlags.map(f=>{
-    const active=v.flags.includes(f.id);
-    return `<button class="variant-flag-chip ${f.type} ${active?'active':''}" onclick="toggleVariantFlag(${vi},'${f.id}')">${esc(f.label)}</button>`;
-  }).join('');
-  return `<div class="variant-card" data-vi="${vi}">
-    <div class="variant-card-header">
-      <input type="text" class="variant-name-input" data-vi="${vi}" value="${esc(v.nomeCompleto)}" placeholder="Nome completo variante (es. Donut alla bolognese vegetariano)">
-      <button class="btn btn-danger btn-xs" onclick="removeVariant(${vi})">✕</button>
-    </div>
-    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-      <span style="font-size:11px;color:var(--text-muted);white-space:nowrap">Etichetta in comanda:</span>
-      <input type="text" class="variant-label-input" data-vi="${vi}" value="${esc(v.etichetta)}" placeholder="es. vegetariana">
-      <div class="variant-comanda-preview" id="varPreview-${vi}">📋 ${preview}</div>
-    </div>
-    <div>
-      <div style="font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted);margin-bottom:5px">Questa variante copre:</div>
-      <div class="variant-flags">${flagsHtml}</div>
-    </div>
-  </div>`;
-}
-
-function updateVariantPreview(vi){
-  const el=document.getElementById(`varPreview-${vi}`);
-  if(!el)return;
-  const dishName=document.getElementById('pNome').value.trim()||'[nome piatto]';
-  const etichetta=state.dishVariants[vi].etichetta;
-  el.innerHTML=`📋 ${esc(dishName)}${etichetta?` <strong>${esc(etichetta)}</strong>`:`<span style="color:var(--text-muted)"> [etichetta non definita]</span>`}`;
-}
-
-function addVariant(){
-  state.dishVariants.push({id:'V'+(nextVariantId++),nomeCompleto:'',etichetta:'',flags:[]});
-  renderVariantsList();
-  setTimeout(()=>{const ins=document.querySelectorAll('.variant-name-input');ins[ins.length-1]?.focus();},60);
-}
-function removeVariant(vi){state.dishVariants.splice(vi,1);renderVariantsList();}
-function toggleVariantFlag(vi,flagId){
-  const v=state.dishVariants[vi];
-  const idx=v.flags.indexOf(flagId);
-  if(idx>=0)v.flags.splice(idx,1);else v.flags.push(flagId);
-  renderVariantsList();
-}
-
-// update all variant previews when dish name changes
-document.getElementById('pNome').addEventListener('input',()=>{
-  state.dishVariants.forEach((_,vi)=>updateVariantPreview(vi));
-});
-
-document.getElementById('btnAddVariant').addEventListener('click',addVariant);
 
 function saveDish(){
   const nome=document.getElementById('pNome').value.trim();
@@ -2091,7 +2005,6 @@ function saveDish(){
       compVariants:(c.compVariants||[]).map(cv=>({...cv,flags:[...(cv.flags||[])],ingredients:(cv.ingredients||[])})),
       ingredients:c.ingredients.map(i=>({...i,flags:[...i.flags]}))
     })),
-    variants:state.dishVariants.map(v=>({...v,flags:[...v.flags]}))
   };
   if(dishId){
     const i=dishes.findIndex(x=>x.id===dishId);
@@ -2436,17 +2349,8 @@ const _wrapMenuSave = (fn) => function(...args){
 };
 
 // Patch addCustomFlag / removeCustomFlag / renameCustomTag / retypeCustomTag
-const _origAddCustomFlag = addCustomFlag;
-function addCustomFlag(){
-  _origAddCustomFlag();
-  fbSaveTags();
-}
-const _origRemoveCustomFlag = removeCustomFlag;
-function removeCustomFlag(fi){
-  _origRemoveCustomFlag(fi);
-  fbSaveTags();
-  renderTagsPage();
-}
+// addCustomFlag patched inline
+// removeCustomFlag already calls fbSaveTags directly
 
 // addIngredient already calls rememberIngredient; we patch rememberIngredient to save
 // rememberIngredient debounce - save tags to Firebase after 2s of inactivity
