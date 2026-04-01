@@ -684,7 +684,8 @@ const TYPES=['titolare','secondario'];
 const TOTAL_PORTATE=15;
 
 // Allergeni standard EU + attributi culinari rilevanti
-const ALLERGEN_FLAGS=[
+// Default tag set — used to pre-populate globalCustomFlags on first run
+const DEFAULT_FLAGS=[
   {id:'glutine',label:'Glutine',type:'allergen'},
   {id:'lattosio',label:'Lattosio',type:'allergen'},
   {id:'uova',label:'Uova',type:'allergen'},
@@ -707,6 +708,8 @@ const ALLERGEN_FLAGS=[
   {id:'aglio',label:'Aglio',type:'warn'},
   {id:'cipolla',label:'Cipolla',type:'warn'},
 ];
+// Keep ALLERGEN_FLAGS as alias for backward compat
+const ALLERGEN_FLAGS=DEFAULT_FLAGS;
 
 const state={
   page:'tavoli', service:'cena',
@@ -727,12 +730,19 @@ const state={
   comandaEditMode:false
 };
 
-// ─── GLOBAL CUSTOM TAGS (persist across dishes) ───
-const globalCustomFlags=[];
+// ─── GLOBAL CUSTOM TAGS (persist across dishes, includes standard ones) ───
+const globalCustomFlags=[];  // starts empty, populated from Firestore or defaults
 let nextCustomFlagId=1;
 
+function ensureDefaultFlags(){
+  // If no tags at all, load defaults
+  if(globalCustomFlags.length===0){
+    DEFAULT_FLAGS.forEach(f=>globalCustomFlags.push({...f}));
+  }
+}
+
 function getAllFlag(id){
-  return ALLERGEN_FLAGS.find(x=>x.id===id) || globalCustomFlags.find(x=>x.id===id) || {id,label:id,type:'custom'};
+  return globalCustomFlags.find(x=>x.id===id) || {id,label:id,type:'custom'};
 }
 // ─── GLOBAL INGREDIENT MEMORY ───
 const ingredientMemory=new Set();
@@ -795,13 +805,14 @@ function renderServiceTabs(){
 }
 function renderDayPills(){
   const c=document.getElementById('dayPills');
-  const today=todayISO();
+  const base=state.selectedDate||todayISO();
   const pills=[];
   for(let i=0;i<=6;i++){
-    const d=new Date(today+'T12:00:00');
+    const d=new Date(base+'T12:00:00');
     d.setDate(d.getDate()+i);
     const iso=d.toISOString().slice(0,10);
-    const dayName=i===0?'Oggi':d.toLocaleDateString('it-IT',{weekday:'short'});
+    const isToday=iso===todayISO();
+    const dayName=isToday?'Oggi':d.toLocaleDateString('it-IT',{weekday:'short'});
     const dateNum=d.toLocaleDateString('it-IT',{day:'2-digit',month:'short'});
     pills.push({iso,dayName,dateNum});
   }
@@ -2053,11 +2064,10 @@ function renderArchivio(){
 // ═══════════════════════════════════════════════════════
 function renderTagsPage(){
   const c=document.getElementById('tagsPageContent');
-  const allCustom=globalCustomFlags;
   let html=`
-    <div style="max-width:600px">
+    <div style="max-width:640px">
       <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:20px;box-shadow:var(--shadow-sm);margin-bottom:20px">
-        <div style="font-size:13px;font-weight:500;margin-bottom:12px">Aggiungi nuovo tag personalizzato</div>
+        <div style="font-size:13px;font-weight:500;margin-bottom:12px">Aggiungi nuovo tag</div>
         <div style="display:flex;gap:8px;align-items:center">
           <input type="text" id="tagPageInput" class="form-input" style="flex:1" placeholder="es. mandorle, agrumi, aceto balsamico…">
           <select id="tagPageType" class="form-select" style="width:140px">
@@ -2067,24 +2077,19 @@ function renderTagsPage(){
           </select>
           <button class="btn btn-primary btn-sm" onclick="addTagFromPage()">+ Aggiungi</button>
         </div>
-        <div class="form-hint" style="margin-top:8px">I tag aggiunti qui compaiono nei tag rapidi di tutti i componenti di ogni piatto</div>
-      </div>
-
-      <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:20px;box-shadow:var(--shadow-sm);margin-bottom:20px">
-        <div style="font-size:13px;font-weight:500;margin-bottom:12px">Tag standard (allergeni EU + attributi culinari)</div>
-        <div style="display:flex;gap:6px;flex-wrap:wrap">
-          ${ALLERGEN_FLAGS.map(f=>`<span class="dish-tag ${f.type==='allergen'?'tag-allergen':'tag-warning'}" style="font-size:11px;padding:3px 10px">${esc(f.label)}</span>`).join('')}
-        </div>
-        <div class="form-hint" style="margin-top:8px">Questi tag sono fissi e non modificabili</div>
+        <div class="form-hint" style="margin-top:8px">Tutti i tag qui compaiono nei tag rapidi di ogni componente di ogni piatto</div>
       </div>
 
       <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:20px;box-shadow:var(--shadow-sm)">
-        <div style="font-size:13px;font-weight:500;margin-bottom:12px">Tag personalizzati (${allCustom.length})</div>
-        ${!allCustom.length?`<div style="color:var(--text-muted);font-size:13px;font-style:italic">Nessun tag personalizzato aggiunto</div>`:''}
-        <div style="display:flex;flex-direction:column;gap:6px" id="customTagsList">
-          ${allCustom.map((f,fi)=>`
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+          <div style="font-size:13px;font-weight:500">Tutti i tag (${globalCustomFlags.length})</div>
+          <button class="btn btn-ghost btn-xs" onclick="restoreDefaultFlags()" title="Ripristina tag standard EU">↩ Ripristina default</button>
+        </div>
+        ${!globalCustomFlags.length?`<div style="color:var(--text-muted);font-size:13px;font-style:italic">Nessun tag — clicca "Ripristina default" per ricaricare quelli standard</div>`:''}
+        <div style="display:flex;flex-direction:column;gap:6px">
+          ${globalCustomFlags.map((f,fi)=>`
             <div style="display:flex;align-items:center;gap:10px;padding:8px 12px;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm)">
-              <span class="dish-tag ${f.type==='allergen'?'tag-allergen':f.type==='warn'?'tag-warning':'tag-custom'}">${esc(f.label)}</span>
+              <span class="dish-tag ${f.type==='allergen'?'tag-allergen':f.type==='warn'?'tag-warning':'tag-custom'}" style="min-width:70px;text-align:center">${esc(f.label)}</span>
               <input type="text" value="${esc(f.label)}" class="form-input" style="flex:1;padding:5px 10px;font-size:12px" onchange="renameCustomTag(${fi},this.value)">
               <select class="form-select" style="width:130px;padding:5px 8px;font-size:12px" onchange="retypeCustomTag(${fi},this.value)">
                 <option value="allergen" ${f.type==='allergen'?'selected':''}>🔴 Allergene</option>
@@ -2100,23 +2105,38 @@ function renderTagsPage(){
   document.getElementById('tagPageInput')?.addEventListener('keydown',e=>{if(e.key==='Enter')addTagFromPage();});
 }
 
+function restoreDefaultFlags(){
+  if(!confirm('Vuoi aggiungere tutti i tag standard mancanti? Quelli già presenti non verranno duplicati.'))return;
+  let added=0;
+  DEFAULT_FLAGS.forEach(f=>{
+    if(!globalCustomFlags.find(x=>x.id===f.id)){
+      globalCustomFlags.push({...f});
+      added++;
+    }
+  });
+  fbSaveTags();
+  renderTagsPage();
+  showToast(added>0?`✅ Aggiunti ${added} tag standard`:'✓ Tutti i tag standard erano già presenti');
+}
+
 function addTagFromPage(){
   const inp=document.getElementById('tagPageInput');
   const type=document.getElementById('tagPageType')?.value||'custom';
   const val=inp?.value.trim();
   if(!val)return;
-  if(globalCustomFlags.find(f=>f.label.toLowerCase()===val.toLowerCase())||ALLERGEN_FLAGS.find(f=>f.label.toLowerCase()===val.toLowerCase())){showToast('⚠️ Tag già esistente');return;}
+  if(globalCustomFlags.find(f=>f.label.toLowerCase()===val.toLowerCase())){showToast('⚠️ Tag già esistente');return;}
   const id='cf_'+val.toLowerCase().replace(/\s+/g,'_')+(nextCustomFlagId++);
   globalCustomFlags.push({id,label:val,type});
   if(inp)inp.value='';
+  fbSaveTags();
   renderTagsPage();
   showToast('✅ Tag aggiunto');
 }
 function renameCustomTag(fi,newLabel){
   if(!newLabel.trim())return;
   globalCustomFlags[fi].label=newLabel.trim();
-  // update id to match
   globalCustomFlags[fi].id='cf_'+newLabel.trim().toLowerCase().replace(/\s+/g,'_');
+  fbSaveTags();
 }
 function retypeCustomTag(fi,newType){
   globalCustomFlags[fi].type=newType;
@@ -2330,6 +2350,8 @@ async function loadFromFirestore(){
       if(d.globalCustomFlags) globalCustomFlags.push(...d.globalCustomFlags);
       if(d.ingredientMemory) d.ingredientMemory.forEach(i=>ingredientMemory.add(i));
     }
+    // If no tags saved yet, load defaults
+    ensureDefaultFlags();
 
     // 3. tables — load all table keys
     const tablesSnap = await db.collection('tables').get();
