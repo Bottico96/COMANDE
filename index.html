@@ -549,6 +549,7 @@ header{height:var(--header-h);background:var(--surface);border-bottom:1px solid 
         <label class="form-label">Menu assegnato</label>
         <select class="form-select" id="tMenu">
           <option value="">— Seleziona menu —</option>
+          <option value="entrambi">Non scelto (entrambi)</option>
           <option value="riflesso">Riflesso</option>
           <option value="riflessioni">Riflessioni</option>
         </select>
@@ -1018,6 +1019,7 @@ REGOLE:
 - Ragiona come cuoco esperto, non keyword matching
 - Se ingrediente non si percepisce (dalle note), non è un problema
 - Gerarchia: 1) ingrediente O si toglie → nota "no X" 2) ingrediente M si adatta 3) variante componente (CV) 4) variante piatto 5) piatto secondario
+- Le varianti piatto sono in ORDINE DI PRIORITÀ: scegli sempre la PRIMA variante compatibile nella lista
 - Per gravidanza: crudo (carne/pesce/uova/formaggi crudi), alcol, formaggi molli
 - Buon senso su intensità: tracce non contano, presenza dominante sì
 
@@ -1133,6 +1135,18 @@ function openComanda(tableId){
   const table=getTables().find(t=>t.id===tableId);
   if(!table){showToast('⚠️ Tavolo non trovato');return;}
   if(!table.menu){showToast('⚠️ Assegna un menu al tavolo prima di aprire la comanda');return;}
+
+  // Handle "entrambi" — open menu picker
+  if(table.menu==='entrambi'){
+    const choice=confirm('Il cliente non ha ancora scelto il menu.\n\nOK = Riflesso\nAnnulla = Riflessioni');
+    table.menu=choice?'riflesso':'riflessioni';
+    // save the choice
+    const tables=getTables();
+    const idx=tables.findIndex(t=>t.id===tableId);
+    if(idx>=0)tables[idx]=table;
+    setTables(tables);
+    renderTablesGrid();
+  }
 
   state.comandaTableId=tableId;
 
@@ -1422,8 +1436,33 @@ function stampaComanda(){
     return h;
   }
 
-  // Two side by side (same comanda twice, as per your format)
-  const printContent=buildPrintComanda()+buildPrintComanda();
+  // Collect all tables for today's service to pair them
+  const allTables=getTables();
+  const tableIdx=allTables.findIndex(t=>t.id===state.comandaTableId);
+  // Find a paired table (next one in the list, or empty if none)
+  const pairedTable=allTables[tableIdx+1]||null;
+
+  let rightContent='';
+  if(pairedTable&&pairedTable.comanda){
+    // Build print for the paired table
+    const savedCtx=state.comandaTableId;
+    const c2=pairedTable.comanda;
+    const tNum2=allTables.indexOf(pairedTable)+1;
+    rightContent=`<div class="print-comanda">
+      <div class="pc-header">
+        <div><div class="pc-num">${tNum2}</div><div class="pc-meta">${pairedTable.orario||''} · ${capitalize(pairedTable.menu||'')}</div></div>
+        <div style="text-align:right"><div class="pc-name">${esc(pairedTable.nome)} ${esc(pairedTable.cognome)}</div><div class="pc-pax">pax ${pairedTable.ospiti}</div></div>
+      </div>
+      ${c2.nota?`<div class="pc-nota">⚠ ${esc(c2.nota)}</div>`:''}
+      <table class="pc-table"><thead><tr><th class="pc-row-name">Piatto</th><th class="pc-row-qty">Std</th>${Array.from({length:Math.max(...c2.rows.map(r=>r.cols.length),1)-1},(_,i)=>'<th class="pc-row-qty">Qta</th><th class="pc-row-var">Variante</th>').join('')}</tr></thead><tbody>
+      ${c2.rows.map(row=>{const cls=row.status==='blocked'?'pc-row-block':row.status==='modified'?'pc-row-mod':'';const mc=Math.max(...c2.rows.map(r=>r.cols.length),1);return `<tr class="${cls}"><td class="pc-row-name">${esc(row.nome)}</td>${Array.from({length:mc},(_,ci)=>{const col=row.cols[ci]||{qty:0,label:''};return ci===0?`<td class="pc-row-qty">${col.qty||''}</td>`:`<td class="pc-row-qty">${col.qty||''}</td><td class="pc-row-var">${esc(col.label||'')}</td>`;}).join('')}</tr>`;}).join('')}
+      </tbody></table></div>`;
+  } else {
+    // Empty right side
+    rightContent=`<div class="print-comanda" style="background:#f9f9f4;border:1.5px dashed #ccc;display:flex;align-items:center;justify-content:center;color:#aaa;font-size:11pt">Libero</div>`;
+  }
+
+  const printContent=buildPrintComanda()+rightContent;
   document.getElementById('printArea').innerHTML=`<div class="print-sheet">${printContent}</div>`;
   window.print();
 }
@@ -1578,6 +1617,7 @@ function moveDish(key,dishId,dir){
   [dishes[idx].pos,dishes[swapIdx].pos]=[dishes[swapIdx].pos,dishes[idx].pos];
   const[menuName,type]=key.split('-');
   renderMenuPanel(menuName,type);
+  if(typeof fbSaveMenus==='function')fbSaveMenus();
 }
 
 function archiveDish(key,dishId){
@@ -1592,6 +1632,7 @@ function archiveDish(key,dishId){
   state.menus[key]=dishes;
   const[menuName,type]=key.split('-');
   renderMenuPanel(menuName,type);
+  if(typeof fbSaveMenus==='function')fbSaveMenus();
   showToast('📦 Piatto archiviato');
 }
 
@@ -1607,6 +1648,7 @@ function restoreDish(key,dishId){
   state.archivedDishes.splice(idx,1);
   const[menuName,type]=key.split('-');
   renderMenuPanel(menuName,type);
+  if(typeof fbSaveMenus==='function')fbSaveMenus();
   showToast('✅ Piatto riaggiunto al menu');
 }
 
@@ -1701,6 +1743,21 @@ function renderComponentsList(){
   list.querySelectorAll('.comp-variant-label-input').forEach(inp=>{
     inp.addEventListener('input',()=>{state.dishComponents[+inp.dataset.ci].compVariants[+inp.dataset.cvi].etichetta=inp.value;});
   });
+  list.querySelectorAll('.comp-variant-ing-input').forEach(inp=>{
+    inp.addEventListener('keydown',e=>{
+      if(e.key==='Enter'||e.key===','){
+        e.preventDefault();
+        const val=inp.value.trim();
+        if(!val)return;
+        const ci=+inp.dataset.ci,cvi=+inp.dataset.cvi;
+        if(!state.dishComponents[ci].compVariants[cvi].ingredients)state.dishComponents[ci].compVariants[cvi].ingredients=[];
+        state.dishComponents[ci].compVariants[cvi].ingredients.push({nome:val,flags:[]});
+        rememberIngredient(val);
+        inp.value='';
+        renderComponentsList();
+      }
+    });
+  });
 }
 
 function buildComponentHTML(c,ci){
@@ -1728,11 +1785,8 @@ function buildComponentHTML(c,ci){
     </span>`;
   }).join('');
 
-  // quick flag buttons: standard + custom
-  const allQuickFlags=[
-    ...ALLERGEN_FLAGS.map(f=>({...f})),
-    ...globalCustomFlags.map(f=>({...f,type:'custom'}))
-  ];
+  // quick flag buttons — all flags live in globalCustomFlags (includes defaults)
+  const allQuickFlags=globalCustomFlags.length>0 ? globalCustomFlags : DEFAULT_FLAGS;
   const flagsToggleHTML=allQuickFlags.map(f=>{
     const active=c.ingredients.some(i=>i.flags.includes(f.id));
     return `<button class="flag-chip ${f.type} ${active?'active':''}" data-ci="${ci}" data-flag="${f.id}" onclick="toggleComponentFlag(${ci},'${f.id}')">${esc(f.label)}</button>`;
@@ -1741,20 +1795,33 @@ function buildComponentHTML(c,ci){
   // component variants (sub-options)
   const compVars=c.compVariants||[];
   const compVarsHTML=compVars.map((cv,cvi)=>{
+    if(!cv.ingredients)cv.ingredients=[];
+    const cvIngsHTML=cv.ingredients.map((ing,ii)=>`
+      <span class="ingredient-chip" style="font-size:11px;padding:3px 8px">
+        ${esc(ing.nome)}
+        <button type="button" onclick="removeCompVariantIng(${ci},${cvi},${ii})" style="background:none;border:none;cursor:pointer;color:var(--text-muted);font-size:11px;padding:0;line-height:1">×</button>
+      </span>`).join('');
     const cvFlagsHTML=allQuickFlags.map(f=>{
-      const active=cv.flags.includes(f.id);
-      return `<button class="variant-flag-chip ${f.type} ${active?'active':''}" onclick="toggleCompVariantFlag(${ci},${cvi},'${f.id}')" style="font-size:10px;padding:2px 7px">${esc(f.label)}</button>`;
+      const active=(cv.flags||[]).includes(f.id);
+      return `<button class="variant-flag-chip ${f.type==='allergen'?'allergen':f.type==='warn'?'warn':'diet'} ${active?'active':''}" onclick="toggleCompVariantFlag(${ci},${cvi},'${f.id}')" style="font-size:10px;padding:2px 7px">${esc(f.label)}</button>`;
     }).join('');
     return `<div class="comp-variant-item">
       <div class="comp-variant-row">
         <span style="font-size:10px;color:var(--text-muted);white-space:nowrap">Nome completo:</span>
-        <input type="text" class="comp-variant-input" data-ci="${ci}" data-cvi="${cvi}" value="${esc(cv.nomeCompleto||'')}" placeholder="es. Cevice senza mandorle">
+        <input type="text" class="comp-variant-input" data-ci="${ci}" data-cvi="${cvi}" value="${esc(cv.nomeCompleto||'')}" placeholder="es. Cevice di cocco">
         <span style="font-size:10px;color:var(--text-muted);white-space:nowrap">Etichetta comanda:</span>
         <input type="text" class="comp-variant-label-input" data-ci="${ci}" data-cvi="${cvi}" value="${esc(cv.etichetta||'')}" placeholder="es. no mandorle">
         <button class="btn btn-danger btn-xs" onclick="removeCompVariant(${ci},${cvi})">✕</button>
       </div>
-      <div>
-        <div style="font-size:10px;color:var(--text-muted);margin-bottom:3px">Copre:</div>
+      <div style="margin-top:6px">
+        <div style="font-size:10px;color:var(--text-muted);margin-bottom:4px">Ingredienti variante:</div>
+        <div style="display:flex;flex-wrap:wrap;gap:5px;align-items:center">
+          ${cvIngsHTML}
+          <input type="text" class="comp-variant-ing-input ingredient-add-input" data-ci="${ci}" data-cvi="${cvi}" placeholder="+ ingrediente, Invio" style="border:1.5px dashed var(--border-strong);border-radius:10px;padding:3px 10px;font-size:11px;background:transparent;width:140px;outline:none">
+        </div>
+      </div>
+      <div style="margin-top:6px">
+        <div style="font-size:10px;color:var(--text-muted);margin-bottom:3px">Tag rapidi variante:</div>
         <div class="comp-variant-flags">${cvFlagsHTML}</div>
       </div>
     </div>`;
@@ -1812,7 +1879,8 @@ function cycleRemovability(ci){
 
 function addIngredient(ci,nome){
   state.dishComponents[ci].ingredients.push({id:'I'+(nextIngId++),nome,flags:[],removability:'fondamentale'});
-  rememberIngredient(nome);
+  ingredientMemory.add(nome.trim().toLowerCase());
+  if(typeof fbSaveTagsDebounced==='function')fbSaveTagsDebounced();
   renderComponentsList();
 }
 function removeIngredient(ci,ii){state.dishComponents[ci].ingredients.splice(ii,1);renderComponentsList();}
@@ -1843,6 +1911,11 @@ function addCompVariant(ci){
   state.dishComponents[ci].compVariants.push({id:'CV'+(nextCompVariantId++),nomeCompleto:'',etichetta:'',flags:[]});
   renderComponentsList();
 }
+function removeCompVariantIng(ci,cvi,ii){
+  state.dishComponents[ci].compVariants[cvi].ingredients.splice(ii,1);
+  renderComponentsList();
+}
+
 function removeCompVariant(ci,cvi){
   state.dishComponents[ci].compVariants.splice(cvi,1);
   renderComponentsList();
@@ -2009,6 +2082,7 @@ function saveDish(){
   closeDishModal();
   const menuName=key.split('-')[0],type=key.split('-')[1];
   renderMenuPanel(menuName,type);
+  if(typeof fbSaveMenus==='function')fbSaveMenus();
 }
 
 function deleteDish(key,dishId){
@@ -2021,11 +2095,25 @@ function deleteDish(key,dishId){
 function renderArchivio(){
   const c=document.getElementById('archivioContent');
   let html='';
+
+  // ── Add new dish to archive section ──
+  html+=`<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px 20px;margin-bottom:24px;box-shadow:var(--shadow-sm)">
+    <div style="font-size:13px;font-weight:500;margin-bottom:10px">Aggiungi piatto all'archivio</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      <select id="archivioAddMenu" class="form-select" style="width:160px">
+        <option value="riflesso-titolare">Riflesso — Titolare</option>
+        <option value="riflesso-secondario">Riflesso — Secondario</option>
+        <option value="riflessioni-titolare">Riflessioni — Titolare</option>
+        <option value="riflessioni-secondario">Riflessioni — Secondario</option>
+      </select>
+      <button class="btn btn-primary btn-sm" onclick="openDishModalFromArchivio()">+ Crea nuovo piatto</button>
+    </div>
+  </div>`;
+
   MENUS.forEach(m=>{
-    // Combine titolare + secondario per menu, labeled separately
     const allDishes=TYPES.flatMap(t=>{
       const key=`${m}-${t}`;
-      return (state.menus[key]||[]).map(d=>({...d,_type:t}));
+      return (state.menus[key]||[]).map(d=>({...d,_type:t,_key:key}));
     }).sort((a,b)=>a.pos-b.pos);
 
     html+=`<div style="margin-bottom:32px">
@@ -2045,11 +2133,12 @@ function renderArchivio(){
         }).join(' · ')||'';
         return `<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);padding:11px 14px;margin-bottom:6px">
           <div style="display:flex;align-items:center;gap:10px;margin-bottom:4px">
-            <span style="font-size:10px;color:var(--text-muted);background:${d._type==='titolare'?'var(--accent-light)':'var(--gold-light)'};color:${d._type==='titolare'?'var(--accent)':'var(--gold)'};padding:1px 7px;border-radius:10px;flex-shrink:0">${d._type==='titolare'?'Titolare':'Secondario'}</span>
+            <span style="font-size:10px;padding:1px 7px;border-radius:10px;flex-shrink:0;background:${d._type==='titolare'?'var(--accent-light)':'var(--gold-light)'};color:${d._type==='titolare'?'var(--accent)':'var(--gold)'}">${d._type==='titolare'?'Titolare':'Secondario'}</span>
             <span style="font-size:11px;color:var(--text-muted);width:20px;text-align:right;flex-shrink:0">${d.pos}.</span>
             <span style="font-size:14px;font-weight:500;flex:1">${esc(d.nome)}</span>
             ${d.nomeComanda&&d.nomeComanda!==d.nome?`<span style="font-size:11px;color:var(--text-muted)">📋 ${esc(d.nomeComanda)}</span>`:''}
             ${allFlags.length?`<div style="display:flex;gap:4px;flex-wrap:wrap">${flagHtml}</div>`:''}
+            <button class="btn btn-ghost btn-xs" onclick="openDishModal('${d._key}','${d.id}')">✏️ Modifica</button>
           </div>
           ${compsSummary?`<div style="display:flex;gap:8px;flex-wrap:wrap;padding-left:60px">${compsSummary}</div>`:''}
           ${d.variants?.length?`<div style="padding-left:60px;margin-top:4px;display:flex;gap:5px;flex-wrap:wrap"><span style="font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted)">Varianti:</span>${d.variants.map(v=>`<span class="variant-pill">${esc(v.etichetta||v.nomeCompleto)}</span>`).join('')}</div>`:''}
@@ -2059,6 +2148,11 @@ function renderArchivio(){
     html+=`</div>`;
   });
   c.innerHTML=html;
+}
+
+function openDishModalFromArchivio(){
+  const key=document.getElementById('archivioAddMenu')?.value||'riflesso-titolare';
+  openDishModal(key,null,null);
 }
 
 // ═══════════════════════════════════════════════════════
@@ -2267,11 +2361,16 @@ const db = firebase.firestore();
 
 let _firestoreUnsubscribes = [];
 
+let _suppressMenuListener=false;
+
 function fbSaveMenus(){
+  _suppressMenuListener=true;
   db.collection('config').doc('menus').set({
     menus: state.menus,
     archivedDishes: state.archivedDishes
-  }).catch(e=>console.error('fbSaveMenus',e));
+  }).then(()=>{
+    setTimeout(()=>_suppressMenuListener=false, 2000);
+  }).catch(e=>{console.error('fbSaveMenus',e);_suppressMenuListener=false;});
 }
 
 function fbSaveTags(){
@@ -2317,13 +2416,11 @@ function removeCustomFlag(fi){
 }
 
 // addIngredient already calls rememberIngredient; we patch rememberIngredient to save
-const _origRemember = rememberIngredient;
-// eslint-disable-next-line no-global-assign
-function rememberIngredient(nome){
-  _origRemember(nome);
-  // debounce
-  clearTimeout(rememberIngredient._t);
-  rememberIngredient._t = setTimeout(fbSaveTags, 2000);
+// rememberIngredient debounce - save tags to Firebase after 2s of inactivity
+let _rememberDebounce=null;
+function fbSaveTagsDebounced(){
+  clearTimeout(_rememberDebounce);
+  _rememberDebounce=setTimeout(fbSaveTags,2000);
 }
 
 // ── Load from Firestore on boot ────────────────────────
@@ -2390,8 +2487,9 @@ function setupRealtimeListeners(){
   });
   _firestoreUnsubscribes.push(unsub);
 
-  // Listen to config/menus
+  // Listen to config/menus — skip if we just saved (avoid race condition)
   const unsubMenus = db.collection('config').doc('menus').onSnapshot(doc=>{
+    if(_suppressMenuListener) return;
     if(doc.exists){
       const d = doc.data();
       if(d.menus) Object.assign(state.menus, d.menus);
@@ -2410,11 +2508,10 @@ function setupRealtimeListeners(){
   const unsubTags = db.collection('config').doc('tags').onSnapshot(doc=>{
     if(doc.exists){
       const d = doc.data();
-      // Merge without duplication
       if(d.globalCustomFlags){
-        d.globalCustomFlags.forEach(f=>{
-          if(!globalCustomFlags.find(x=>x.id===f.id)) globalCustomFlags.push(f);
-        });
+        // Replace entirely to avoid duplicates
+        globalCustomFlags.length=0;
+        globalCustomFlags.push(...d.globalCustomFlags);
       }
       if(d.ingredientMemory) d.ingredientMemory.forEach(i=>ingredientMemory.add(i));
     }
@@ -2423,28 +2520,7 @@ function setupRealtimeListeners(){
   _firestoreUnsubscribes.push(unsubTags);
 }
 
-// Also patch saveDish / archiveDish / restoreDish / moveDish to call fbSaveMenus
-// We do this by wrapping state.menus assignments
-const _origSaveDish = saveDish;
-function saveDish(){
-  _origSaveDish();
-  fbSaveMenus();
-}
-const _origArchiveDish = archiveDish;
-function archiveDish(key, dishId){
-  _origArchiveDish(key, dishId);
-  fbSaveMenus();
-}
-const _origRestoreDish = restoreDish;
-function restoreDish(key, dishId){
-  _origRestoreDish(key, dishId);
-  fbSaveMenus();
-}
-const _origMoveDish = moveDish;
-function moveDish(key, dishId, dir){
-  _origMoveDish(key, dishId, dir);
-  fbSaveMenus();
-}
+// saveDish/archiveDish/restoreDish/moveDish already call fbSaveMenus via inline calls added below
 
 // ── Tags page save hooks ───────────────────────────────
 const _origRenameCustomTag = renameCustomTag;
