@@ -794,18 +794,21 @@ function renderServiceTabs(){
   c.querySelectorAll('.service-tab').forEach(b=>b.addEventListener('click',()=>{state.service=b.dataset.svc;renderTavoliPage();}));
 }
 function renderDayPills(){
-  // Show quick-access pills for ±7 days around today
   const c=document.getElementById('dayPills');
   const today=todayISO();
   const pills=[];
-  for(let i=-1;i<=5;i++){
+  for(let i=0;i<=6;i++){
     const d=new Date(today+'T12:00:00');
     d.setDate(d.getDate()+i);
     const iso=d.toISOString().slice(0,10);
-    const label=i===0?'Oggi':i===1?'Dom.':d.toLocaleDateString('it-IT',{weekday:'short'});
-    pills.push({iso,label});
+    const dayName=i===0?'Oggi':d.toLocaleDateString('it-IT',{weekday:'short'});
+    const dateNum=d.toLocaleDateString('it-IT',{day:'2-digit',month:'short'});
+    pills.push({iso,dayName,dateNum});
   }
-  c.innerHTML=pills.map(p=>`<button class="day-pill ${p.iso===state.selectedDate?'active':''}" data-date="${p.iso}">${p.label}</button>`).join('');
+  c.innerHTML=pills.map(p=>`<button class="day-pill ${p.iso===state.selectedDate?'active':''}" data-date="${p.iso}" style="display:flex;flex-direction:column;align-items:center;gap:1px;padding:5px 12px;line-height:1.3">
+    <span style="font-size:10px;text-transform:capitalize">${p.dayName}</span>
+    <span style="font-size:12px;font-weight:500">${p.dateNum}</span>
+  </button>`).join('');
   c.querySelectorAll('.day-pill').forEach(b=>b.addEventListener('click',()=>{
     state.selectedDate=b.dataset.date;
     document.getElementById('datePickerMain').value=state.selectedDate;
@@ -823,7 +826,7 @@ function esc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').
 
 function renderTablesGrid(){
   const grid=document.getElementById('tablesGrid');
-  document.getElementById('serviceLabel').textContent=(state.service==='cena'?'Cena':'Pranzo')+' — '+DAYS_FULL[state.dayIdx];
+  document.getElementById('serviceLabel').textContent=(state.service==='cena'?'Cena':'Pranzo')+' — '+formatDateIT(state.selectedDate);
   const isPranzo=state.service==='pranzo';
   const avail=!isPranzo||state.dayIdx===5||state.dayIdx===6;
   if(!avail){grid.innerHTML=`<div class="empty-state" style="grid-column:1/-1"><div class="empty-icon">🚫</div><p>Il pranzo è disponibile solo sabato e domenica</p></div>`;return;}
@@ -1713,9 +1716,8 @@ function buildComponentHTML(c,ci){
   }).join('');
 
   // quick flag buttons: standard + custom
-  const topFlags=['lattosio','glutine','uova','molluschi','frutta_secca','piccante','crudo','maiale'];
   const allQuickFlags=[
-    ...topFlags.map(id=>({id,label:ALLERGEN_FLAGS.find(x=>x.id===id)?.label||id,type:ALLERGEN_FLAGS.find(x=>x.id===id)?.type||'allergen'})),
+    ...ALLERGEN_FLAGS.map(f=>({...f})),
     ...globalCustomFlags.map(f=>({...f,type:'custom'}))
   ];
   const flagsToggleHTML=allQuickFlags.map(f=>{
