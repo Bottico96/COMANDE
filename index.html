@@ -1582,7 +1582,7 @@ function renderMenuPanel(menuName,type){
         <div class="dish-name">${esc(d.nome)}</div>
         ${d.nomeComanda&&d.nomeComanda!==d.nome?`<div class="dish-desc-short">📋 ${esc(d.nomeComanda)}</div>`:''}
         ${d.components?.length?`<div class="dish-desc-short">${d.components.length} componenti</div>`:''}
-        \${allFlags.length?`<div class='dish-tags'>\${flagHtml}</div>`:''}
+        ${allFlags.length?`<div class="dish-tags">${flagHtml}</div>`:''}
       </div>
       <div class="dish-actions" style="display:flex;gap:5px;flex-shrink:0">
         <button class="btn btn-ghost btn-xs" onclick="openDishModal('${key}','${d.id}')">✏️</button>
