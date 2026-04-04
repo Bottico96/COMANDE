@@ -477,6 +477,7 @@ header{height:var(--header-h);background:var(--surface);border-bottom:1px solid 
   <div class="sidebar-section-label">Archivio</div>
   <button class="nav-item" data-page="piatti"><span class="nav-icon">📖</span> Tutti i piatti</button>
   <button class="nav-item" data-page="tags"><span class="nav-icon">🏷️</span> Tag</button>
+  <button class="nav-item" data-page="storico"><span class="nav-icon">📚</span> Storico AI</button>
 </nav>
 
 <main class="main-content">
@@ -549,8 +550,13 @@ header{height:var(--header-h);background:var(--surface);border-bottom:1px solid 
     <div id="archivioContent"></div>
   </div>
 
-  <!-- ── TAGS ── -->
-  <div class="page" id="page-tags">
+  <!-- ── STORICO AI ── -->
+  <div class="page" id="page-storico">
+    <div class="page-header">
+      <div class="page-title">Storico AI<small>Importa comande storiche per migliorare l'analisi</small></div>
+    </div>
+    <div id="storicoContent"></div>
+  </div>
     <div class="page-header">
       <div class="page-title">Tag<small>Gestisci i tag personalizzati disponibili su tutti i piatti</small></div>
     </div>
@@ -815,6 +821,7 @@ function navigateTo(page){
   if(page==='menu-riflessioni')renderMenuPage('riflessioni');
   if(page==='piatti')renderArchivio();
   if(page==='tags')renderTagsPage();
+  if(page==='storico')renderStoricoPage();
 }
 document.querySelectorAll('.nav-item[data-page]').forEach(b=>b.addEventListener('click',()=>navigateTo(b.dataset.page)));
 
@@ -1060,10 +1067,19 @@ ${secondaryCtx}
 REGOLE:
 - Ragiona come cuoco esperto, non keyword matching
 - Se ingrediente non si percepisce (dalle note), non è un problema
-- Gerarchia: 1) ingrediente O → si toglie, nota "no X" 2) componente M (ha varianti) → scegli la CV compatibile 3) piatto secondario
-- Le varianti piatto sono in ORDINE DI PRIORITÀ: scegli sempre la PRIMA variante compatibile nella lista
 - Per gravidanza: crudo (carne/pesce/uova/formaggi crudi), alcol, formaggi molli
 - Buon senso su intensità: tracce non contano, presenza dominante sì
+
+GERARCHIA DECISIONALE (rispetta SEMPRE questo ordine):
+1. Ingrediente O (opzionale) nel piatto attuale → si toglie, nota "no X"
+2. Componente M (ha varianti CV) → scegli la prima CV compatibile
+3. Piatto del MENU SECONDARIO ATTUALE compatibile → usa solo se il piatto esiste nella lista sopra
+4. NESSUNA SOLUZIONE TROVATA → status "block", sostituto null, compila suggerimento_storico se disponibile
+
+IMPORTANTE sul menu secondario: usa SOLO piatti che esistono effettivamente nella lista "MENU SECONDARIO" sopra. Non inventare nomi. Se un piatto storico non è presente nel menu secondario attuale, non usarlo come sostituto.
+
+IMPORTANTE sui pattern storici: servono SOLO per compilare "suggerimento_storico" quando non trovi soluzione nel menu attuale. Non usarli per modificare ingredienti — quello lo gestisce la struttura del piatto.
+${buildRAGContext()}
 
 Rispondi SOLO con JSON valido:
 {
@@ -1077,8 +1093,9 @@ Rispondi SOLO con JSON valido:
           "portata": 3,
           "piatto": "nome in comanda",
           "status": "mod|block",
-          "nota_comanda": "es. 'no pera' o 'vegetariana' o 'cevice no mandorle'",
-          "sostituto": "nome piatto secondario o null"
+          "nota_comanda": "es. 'no pera' o 'cevice no mandorle'",
+          "sostituto": "nome piatto secondario esistente o null",
+          "suggerimento_storico": "es. 'In passato servito con Carciofo' oppure null"
         }
       ]
     }
@@ -1129,6 +1146,7 @@ function renderAIResult(result, totalGuests){
         return `<div class="ai-item ${cls}" style="margin:0">
           ${icon} <strong>Portata ${m.portata} — ${esc(m.piatto)}</strong>: ${esc(m.nota_comanda)}
           ${m.sostituto?` → <strong>${esc(m.sostituto)}</strong>`:''}
+          ${m.suggerimento_storico&&!m.sostituto?`<div style="margin-top:4px;font-size:11px;color:#7a5820;background:#fdf8ec;border:1px solid #e8d89a;border-radius:4px;padding:3px 8px;display:inline-block">💡 Storico: ${esc(m.suggerimento_storico)}</div>`:''}
         </div>`;
       }).join('')}</div>`:''}
     </div>`;
@@ -2335,7 +2353,180 @@ function showToast(msg,dur=2800){
 }
 
 // ═══════════════════════════════════════════════════════
-// RIEPILOGO SERATA
+// STORICO AI — importa comande storiche per RAG
+// ═══════════════════════════════════════════════════════
+function renderStoricoPage(){
+  const c=document.getElementById('storicoContent');
+  // Count stored patterns from Firestore
+  const patternCount=state._storicoPatterns?.length||0;
+  const sierateCount=state._storicoSerate?.length||0;
+
+  c.innerHTML=`
+    <div style="max-width:700px">
+      <!-- Stats -->
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:24px">
+        <div class="stat-card">
+          <div class="stat-label">Pattern sostituzione</div>
+          <div class="stat-value accent" id="statPatterns">${patternCount}</div>
+          <div class="stat-sub">piatto + restrizione → alternativa</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Serate importate</div>
+          <div class="stat-value" id="statSerate">${sierateCount}</div>
+          <div class="stat-sub">file Excel caricati</div>
+        </div>
+      </div>
+
+      <!-- Import area -->
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:20px;box-shadow:var(--shadow-sm);margin-bottom:20px">
+        <div style="font-size:14px;font-weight:500;margin-bottom:8px">📤 Importa file Excel storico</div>
+        <div class="form-hint" style="margin-bottom:14px">Trascina o seleziona un file Excel comande (stesso formato del file serata). Il sistema estrae automaticamente i pattern restrizione→alternativa.</div>
+        <div style="border:2px dashed var(--border);border-radius:var(--radius);padding:24px;text-align:center;cursor:pointer;transition:all .15s" id="dropZone"
+          onclick="document.getElementById('storicoFileInput').click()"
+          ondragover="event.preventDefault();this.style.borderColor='var(--accent)';this.style.background='var(--accent-light)'"
+          ondragleave="this.style.borderColor='var(--border)';this.style.background=''"
+          ondrop="event.preventDefault();this.style.borderColor='var(--border)';this.style.background='';handleStoricoFile(event.dataTransfer.files[0])">
+          <div style="font-size:28px;margin-bottom:8px">📂</div>
+          <div style="font-size:13px;font-weight:500">Clicca o trascina il file Excel</div>
+          <div style="font-size:11px;color:var(--text-muted);margin-top:4px">.xlsx — stesso formato file serata</div>
+        </div>
+        <input type="file" id="storicoFileInput" accept=".xlsx" style="display:none" onchange="handleStoricoFile(this.files[0])">
+        <div id="importProgress" style="margin-top:12px;display:none">
+          <div style="height:4px;background:var(--border);border-radius:2px;overflow:hidden">
+            <div id="importBar" style="height:100%;background:var(--accent);width:0%;transition:width .3s"></div>
+          </div>
+          <div id="importMsg" style="font-size:12px;color:var(--text-muted);margin-top:6px"></div>
+        </div>
+      </div>
+
+      <!-- Pattern list preview -->
+      ${patternCount>0?`
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:20px;box-shadow:var(--shadow-sm)">
+        <div style="font-size:13px;font-weight:500;margin-bottom:12px">Esempi di pattern appresi</div>
+        <div style="font-size:11px;color:var(--text-muted);margin-bottom:10px">L'AI usa questi pattern quando analizza le restrizioni dei clienti</div>
+        <div style="display:flex;flex-direction:column;gap:5px;max-height:300px;overflow-y:auto">
+          ${(state._storicoPatterns||[]).slice(0,30).map(p=>`
+            <div style="display:flex;gap:8px;align-items:center;padding:6px 10px;background:var(--bg);border-radius:var(--radius-sm);font-size:12px">
+              <span style="font-weight:500;min-width:100px">${esc(p.piatto_titolare)}</span>
+              <span style="color:var(--danger);background:var(--danger-light);padding:1px 8px;border-radius:10px;font-size:10px;flex-shrink:0">${esc(p.restrizione.replace(/_/g,' '))}</span>
+              <span style="color:var(--text-muted)">→</span>
+              <span style="color:var(--accent);font-style:italic">${esc(p.alternativa)}</span>
+            </div>`).join('')}
+        </div>
+        ${patternCount>30?`<div style="font-size:11px;color:var(--text-muted);margin-top:8px">... e altri ${patternCount-30} pattern</div>`:''}
+      </div>`:''}
+    </div>`;
+}
+
+async function handleStoricoFile(file){
+  if(!file||!file.name.endsWith('.xlsx')){showToast('⚠️ Seleziona un file .xlsx');return;}
+  
+  document.getElementById('importProgress').style.display='block';
+  const bar=document.getElementById('importBar');
+  const msg=document.getElementById('importMsg');
+  
+  msg.textContent='Lettura file...';
+  bar.style.width='20%';
+
+  try{
+    // Use FileReader to get base64, then send to Claude API for parsing
+    const arrayBuffer=await file.arrayBuffer();
+    bar.style.width='40%';
+    msg.textContent='Analisi struttura...';
+
+    // Parse with SheetJS (loaded from CDN in artifacts) — here we use a simpler approach
+    // Send to Claude API to parse and extract patterns
+    const base64=btoa(String.fromCharCode(...new Uint8Array(arrayBuffer)));
+    bar.style.width='60%';
+    msg.textContent='Estrazione pattern restrizione→alternativa...';
+
+    const resp=await fetch('https://api.anthropic.com/v1/messages',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({
+        model:'claude-sonnet-4-20250514',
+        max_tokens:4000,
+        messages:[{
+          role:'user',
+          content:[
+            {type:'document',source:{type:'base64',media_type:'application/pdf',data:base64}},
+            {type:'text',text:`Questo è un file Excel di comande di un ristorante fine dining.
+Estrai TUTTI i pattern restrizione→alternativa nel formato JSON.
+Cerca nel foglio "MENU' RIFLESSO E ALTERNATIVE" o simile che mappa piatti titolari → alternative per restrizioni.
+Cerca anche nei fogli singoli tavolo le restrizioni per ospite e le alternative servite.
+
+Rispondi SOLO con JSON valido:
+{
+  "pattern_sostituzione": [
+    {"piatto_titolare": "...", "restrizione": "...", "alternativa": "..."}
+  ],
+  "storico_tavoli": [
+    {"restrizioni_note": "...", "modifiche": [{"piatto": "...", "alternativa": "..."}]}
+  ]
+}`}
+          ]
+        }]
+      })
+    });
+    
+    bar.style.width='80%';
+    msg.textContent='Salvataggio su Firestore...';
+    
+    const data=await resp.json();
+    const text=data.content?.[0]?.text||'{}';
+    const parsed=JSON.parse(text.replace(/```json|```/g,'').trim());
+    
+    // Merge with existing
+    if(!state._storicoPatterns)state._storicoPatterns=[];
+    if(!state._storicoSerate)state._storicoSerate=[];
+    
+    const newPatterns=parsed.pattern_sostituzione||[];
+    const newSerate=parsed.storico_tavoli||[];
+    
+    // Deduplicate patterns
+    newPatterns.forEach(p=>{
+      const exists=state._storicoPatterns.find(x=>x.piatto_titolare===p.piatto_titolare&&x.restrizione===p.restrizione&&x.alternativa===p.alternativa);
+      if(!exists)state._storicoPatterns.push(p);
+    });
+    
+    if(newSerate.length)state._storicoSerate.push({file:file.name,serate:newSerate});
+    
+    // Save to Firestore
+    await db.collection('config').doc('storico').set({
+      patterns: state._storicoPatterns,
+      serate: state._storicoSerate,
+      aggiornato: new Date().toISOString()
+    });
+    
+    bar.style.width='100%';
+    msg.textContent=`✅ Importati ${newPatterns.length} pattern, ${newSerate.length} record tavoli`;
+    
+    setTimeout(()=>{
+      document.getElementById('importProgress').style.display='none';
+      renderStoricoPage();
+    },2000);
+    
+    showToast(`✅ ${newPatterns.length} pattern importati da ${file.name}`);
+    
+  }catch(err){
+    msg.textContent='⚠️ Errore: '+err.message;
+    bar.style.width='100%';
+    bar.style.background='var(--danger)';
+    console.error(err);
+  }
+}
+
+// Build RAG context for AI prompt from stored patterns
+function buildRAGContext(){
+  if(!state._storicoPatterns?.length) return '';
+  const patterns = state._storicoPatterns.slice(0, 60);
+  let ctx = '\n\nPATTERN STORICI PER SUGGERIMENTI (solo per "suggerimento_storico" quando nessuna soluzione nel menu attuale):\n';
+  ctx += 'Questi sono piatti usati in passato come sostituti. VERIFICA sempre che esistano nel menu secondario attuale prima di usarli come sostituto. Se non esistono, mettili solo in suggerimento_storico.\n';
+  ctx += patterns.map(p =>
+    `- ${p.piatto_titolare.trim()} | ${p.restrizione.replace(/_/g,' ')} → in passato: ${p.alternativa}`
+  ).join('\n');
+  return ctx;
+}
 // ═══════════════════════════════════════════════════════
 function openRiepilogo(){
   const tables=getTables().slice().sort((a,b)=>(a.orario||'').localeCompare(b.orario||''));
@@ -2636,7 +2827,17 @@ async function loadFromFirestore(){
       state.tables[doc.id] = doc.data().tables || [];
     });
 
-    // 4. Set up realtime listeners for tables (current service+date changes will trigger re-render)
+    // 4. Load storico AI patterns
+    try{
+      const storicoDoc=await db.collection('config').doc('storico').get();
+      if(storicoDoc.exists){
+        const d=storicoDoc.data();
+        state._storicoPatterns=d.patterns||[];
+        state._storicoSerate=d.serate||[];
+      }
+    }catch(e){console.log('No storico yet');}
+
+    // 5. Set up realtime listeners for tables (current service+date changes will trigger re-render)
     setupRealtimeListeners();
 
   }catch(e){
