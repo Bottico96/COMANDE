@@ -2494,102 +2494,90 @@ async function handleStoricoFiles(items){
   _importAborted=false;
   let startTime=Date.now();
   let batchTexts=[];
+
   for(const file of files){
     if(_importAborted)break;
     processed++;
+
+    // Update progress + ETA
     const pct=Math.round((processed/files.length)*85)+5;
     bar.style.width=pct+'%';
-    
-    // Calculate ETA
     const elapsed=(Date.now()-startTime)/1000;
     const avgSec=elapsed/processed;
     const remaining=Math.round(avgSec*(files.length-processed));
-    const etaStr=processed>1?(remaining>60?`~${Math.round(remaining/60)} min`:`~${remaining} sec`):' ';
-    
-    msg.textContent=`${processed}/${files.length} — ${file.name} ${etaStr?`· rimangono ${etaStr}`:'...'}`;
+    const etaStr=processed>1?(remaining>60?`~${Math.round(remaining/60)} min`:`~${remaining} sec`):'';
+    msg.textContent=`${processed}/${files.length} — ${file.name}${etaStr?' · rimangono '+etaStr:''}`;
 
+    // 1. Extract text from Excel with SheetJS
+    let fileText='';
     try{
-      const arrayBuffer=await file.arrayBuffer();
-      let fileText='';
-      try{
-        const XLSX=window.XLSX;
-        if(!XLSX)throw new Error('SheetJS non caricato');
-        const wb=XLSX.read(arrayBuffer,{type:'array'});
-        // Extract relevant sheets: alternatives sheet + numbered table sheets
-        for(const sn of wb.SheetNames){
-          const isAlt=sn.toUpperCase().includes('MENU')||sn.toUpperCase().includes('ALT')||sn.toUpperCase().includes('RIFL');
-          const isTable=!isNaN(sn.trim())||sn.match(/^\d+$/);
-          if(!isAlt&&!isTable) continue;
-          const ws=wb.Sheets[sn];
-          const rows=XLSX.utils.sheet_to_json(ws,{header:1,defval:''});
-          const nonEmpty=rows.filter(r=>r.some(c=>String(c).trim())).slice(0,40);
-          if(nonEmpty.length>1){
-            fileText+=`\n-- FILE: ${file.name} | FOGLIO: ${sn} --\n`;
-            fileText+=nonEmpty.map(r=>r.map(c=>String(c).trim()).join('\t')).join('\n');
-          }
+      const XLSX=window.XLSX;
+      if(!XLSX)throw new Error('SheetJS non caricato');
+      const wb=XLSX.read(await file.arrayBuffer(),{type:'array'});
+      for(const sn of wb.SheetNames){
+        const upper=sn.toUpperCase();
+        const isRelevant=upper.includes('MENU')||upper.includes('ALT')||upper.includes('RIFL')||!isNaN(sn.trim());
+        if(!isRelevant) continue;
+        const rows=XLSX.utils.sheet_to_json(wb.Sheets[sn],{header:1,defval:''});
+        const nonEmpty=rows.filter(r=>r.some(c=>String(c).trim())).slice(0,40);
+        if(nonEmpty.length>1){
+          fileText+=`\n-- ${file.name} | ${sn} --\n`;
+          fileText+=nonEmpty.map(r=>r.map(c=>String(c).trim()).join('\t')).join('\n');
         }
-      }catch(e){
-        console.error('SheetJS error',file.name,e);
-        errors++;
-        continue;
       }
+    }catch(e){
+      console.error('SheetJS error',file.name,e);
+      errors++;
+    }
 
-      if(fileText) batchTexts.push(fileText);
+    if(fileText) batchTexts.push(fileText);
+    state._storicoSerate.push({file:file.name});
 
-      // Process batch every 10 files or at the end
-      const isLastFile=processed===files.length;
-      if(batchTexts.length>=10||isLastFile){
-        if(batchTexts.length>0){
-          try{
-            const batchContent=batchTexts.join('\n\n===PROSSIMO FILE===\n\n').slice(0,12000);
-            const resp=await fetch('https://api.anthropic.com/v1/messages',{
-              method:'POST',
-              headers:{'Content-Type':'application/json'},
-              body:JSON.stringify({
-                model:'claude-sonnet-4-20250514',
-                max_tokens:4000,
-                messages:[{role:'user',content:[{type:'text',text:`Questi sono dati di comande di un ristorante fine dining estratti da file Excel.
-Per ogni file trova:
-1. Nel foglio "MENU' RIFLESSO E ALTERNATIVE" (o simile): la tabella piatto_titolare → alternativa per ogni tipo di restrizione
-2. Nei fogli tavolo numerati: le restrizioni degli ospiti e i piatti alternativi serviti
+    // 2. Process batch every 10 files or at the last file
+    const isLast=processed===files.length||_importAborted;
+    if((batchTexts.length>=10||isLast)&&batchTexts.length>0){
+      msg.textContent=`${processed}/${files.length} — analisi batch di ${batchTexts.length} file...`;
+      try{
+        const batchContent=batchTexts.join('\n\n===PROSSIMO FILE===\n\n').slice(0,12000);
+        const resp=await fetch('https://api.anthropic.com/v1/messages',{
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({
+            model:'claude-sonnet-4-20250514',
+            max_tokens:4000,
+            messages:[{role:'user',content:[{type:'text',text:`Dati di comande ristorante fine dining da file Excel.
+Cerca in ogni file:
+1. Foglio "MENU' RIFLESSO E ALTERNATIVE": tabella piatto→alternativa per ogni restrizione
+2. Fogli tavolo numerati: restrizioni ospiti e alternative servite
 
-Estrai TUTTI i pattern. Normalizza le restrizioni in italiano semplice (es. "no pesce", "vegetariano", "no glutine", "no lattosio", "no carne", "no crostacei", "no molluschi", "no uova", "vegano", "incinta").
+Normalizza restrizioni: "no pesce", "vegetariano", "no glutine", "no lattosio", "no carne", "no crostacei", "no molluschi", "no uova", "vegano", "incinta".
 
 DATI:
 ${batchContent}
 
-Rispondi SOLO con JSON valido:
+Rispondi SOLO JSON:
 {"pattern_sostituzione":[{"piatto_titolare":"...","restrizione":"...","alternativa":"..."}]}`}]}]
-              })
-            });
-            const data=await resp.json();
-            const text=data.content?.[0]?.text||'{}';
-            let parsed={};
-            try{parsed=JSON.parse(text.replace(/```json[\s\S]*?```|```/g,'').trim());}catch(e){}
-            (parsed.pattern_sostituzione||[]).forEach(p=>{
-              if(!p.piatto_titolare||!p.alternativa)return;
-              const exists=state._storicoPatterns.find(x=>
-                x.piatto_titolare===p.piatto_titolare&&x.restrizione===p.restrizione&&x.alternativa===p.alternativa
-              );
-              if(!exists){state._storicoPatterns.push(p);totalNewPatterns++;}
-            });
-          }catch(e){console.error('Batch API error',e);errors++;}
-          batchTexts=[];
-          // Save checkpoint every batch
-          await db.collection('config').doc('storico').set({
-            patterns:state._storicoPatterns,
-            serate:state._storicoSerate,
-            aggiornato:new Date().toISOString()
-          });
-        }
-      }
+          })
+        });
+        const data=await resp.json();
+        const raw=data.content?.[0]?.text||'{}';
+        let parsed={};
+        try{parsed=JSON.parse(raw.replace(/```json|```/g,'').trim());}catch(e){}
+        (parsed.pattern_sostituzione||[]).forEach(p=>{
+          if(!p.piatto_titolare||!p.alternativa)return;
+          const dup=state._storicoPatterns.find(x=>x.piatto_titolare===p.piatto_titolare&&x.restrizione===p.restrizione&&x.alternativa===p.alternativa);
+          if(!dup){state._storicoPatterns.push(p);totalNewPatterns++;}
+        });
+      }catch(e){console.error('Batch API error',e);errors++;}
 
-      state._storicoSerate.push({file:file.name});
-      continue;
+      batchTexts=[];
 
-    }catch(e){
-      errors++;
-      console.error('Error processing',file.name,e);
+      // Checkpoint save
+      await db.collection('config').doc('storico').set({
+        patterns:state._storicoPatterns,
+        serate:state._storicoSerate,
+        aggiornato:new Date().toISOString()
+      });
     }
   }
 
