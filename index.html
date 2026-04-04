@@ -1608,17 +1608,9 @@ function renderMenuPanel(menuName,type){
   dishes.forEach((d,idx)=>{
     const allFlags=[...new Set(d.components?.flatMap(c=>[...(c.flags||[]),...(c.ingredients?.flatMap(i=>i.flags||[])||[])])||[])];
     const flagHtml=allFlags.map(f=>{const info=getAllFlag(f);const cls=info?.type==='allergen'?'tag-allergen':info?.type==='warn'?'tag-warning':'tag-custom';return `<span class="dish-tag ${cls}">${esc(info?.label||f)}</span>`;}).join('');
-    const isFirst=idx===0,isLast=idx===dishes.length-1;
-    listHtml+=`<div class="dish-item" draggable="true" data-pos="${d.pos}" data-key="${key}">
-      <div style="display:flex;flex-direction:column;align-items:center;gap:2px;flex-shrink:0">
-        <span style="font-size:9px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">pos</span>
-        <input type="number" min="1" max="99" value="${d.pos}" 
-          style="width:40px;text-align:center;border:1.5px solid var(--border);border-radius:var(--radius-sm);padding:3px 4px;font-size:13px;font-weight:600;color:var(--accent);background:var(--accent-light);font-family:'DM Sans',sans-serif;outline:none"
-          onclick="event.stopPropagation()"
-          onchange="event.stopPropagation();setDishPos('${key}','${d.id}',+this.value)"
-          onkeydown="if(event.key==='Enter'){event.stopPropagation();setDishPos('${key}','${d.id}',+this.value);this.blur()}"
-          title="Cambia posizione">
-      </div>
+    listHtml+=`<div class="dish-item" draggable="true" data-id="${d.id}" data-key="${key}" style="cursor:default">
+      <span class="drag-handle" title="Trascina per riordinare" style="cursor:grab;font-size:16px;color:var(--text-muted);padding:0 4px;user-select:none;flex-shrink:0">⠿</span>
+      <div class="dish-position ${isSec?'secondary':''}">${d.pos}</div>
       <div class="dish-info">
         <div class="dish-name">${esc(d.nome)}</div>
         ${d.nomeComanda&&d.nomeComanda!==d.nome?`<div class="dish-desc-short">📋 ${esc(d.nomeComanda)}</div>`:''}
@@ -1626,8 +1618,8 @@ function renderMenuPanel(menuName,type){
         ${allFlags.length?`<div class="dish-tags">${flagHtml}</div>`:''}
       </div>
       <div class="dish-actions" style="display:flex;gap:5px;flex-shrink:0">
-        <button class="btn btn-ghost btn-xs" onclick="openDishModal('${key}','${d.id}')">✏️</button>
-        <button class="btn btn-danger btn-xs" onclick="archiveDish('${key}','${d.id}')" title="Rimuovi dal menu">📦</button>
+        <button class="btn btn-ghost btn-xs" onclick="event.stopPropagation();openDishModal('${key}','${d.id}')">✏️</button>
+        <button class="btn btn-danger btn-xs" onclick="event.stopPropagation();archiveDish('${key}','${d.id}')" title="Rimuovi dal menu">📦</button>
       </div>
     </div>`;
   });
@@ -1643,21 +1635,38 @@ function renderMenuPanel(menuName,type){
     </div>`).join('')}</div>`;
   }
   panel.innerHTML=html;
+
+  // Drag & drop — only from drag handle
+  let dragSrcId=null;
   panel.querySelectorAll('.dish-item[draggable]').forEach(item=>{
-    item.addEventListener('dragstart',e=>{
-      // Don't drag if user clicked a button
-      if(e.target.closest('button'))return e.preventDefault();
-      state.dragSrc={key,pos:+item.dataset.pos};item.style.opacity='.4';e.dataTransfer.effectAllowed='move';
+    const handle=item.querySelector('.drag-handle');
+    // Only start drag from the handle
+    item.addEventListener('mousedown',e=>{
+      item.draggable=!!e.target.closest('.drag-handle');
     });
-    item.addEventListener('dragend',()=>item.style.opacity='1');
+    item.addEventListener('dragstart',e=>{
+      if(!item.draggable)return e.preventDefault();
+      dragSrcId=item.dataset.id;
+      item.style.opacity='.4';
+      e.dataTransfer.effectAllowed='move';
+      e.dataTransfer.setData('text/plain',dragSrcId);
+    });
+    item.addEventListener('dragend',()=>{item.style.opacity='1';item.draggable=true;});
     item.addEventListener('dragover',e=>{e.preventDefault();item.classList.add('drag-over');});
     item.addEventListener('dragleave',()=>item.classList.remove('drag-over'));
     item.addEventListener('drop',e=>{
       e.preventDefault();item.classList.remove('drag-over');
-      if(!state.dragSrc||state.dragSrc.key!==key)return;
-      const dd=state.menus[key],srcPos=state.dragSrc.pos,dstPos=+item.dataset.pos;
-      const si=dd.findIndex(x=>x.pos===srcPos),di=dd.findIndex(x=>x.pos===dstPos);
-      if(si>=0&&di>=0)[dd[si].pos,dd[di].pos]=[dd[di].pos,dd[si].pos];
+      const dstId=item.dataset.id;
+      if(!dragSrcId||dragSrcId===dstId)return;
+      const dd=state.menus[key];
+      const si=dd.findIndex(x=>x.id===dragSrcId);
+      const di=dd.findIndex(x=>x.id===dstId);
+      if(si>=0&&di>=0){
+        const tmp=dd[si].pos;
+        dd[si].pos=dd[di].pos;
+        dd[di].pos=tmp;
+      }
+      dragSrcId=null;
       renderMenuPanel(menuName,type);
       if(typeof fbSaveMenus==='function')fbSaveMenus();
     });
@@ -1728,12 +1737,23 @@ function openDishModal(key,dishId=null,forcedPos=null){
   const parts=key.split('-');
   const menuName=parts[0],type=parts[1];
   if(dishId){
-    const d=(state.menus[key]||[]).find(x=>x.id===dishId);
+    // Search across ALL keys in case of ID collision (defensive)
+    let d=(state.menus[key]||[]).find(x=>x.id===dishId);
+    if(!d){
+      // Fallback: search other keys
+      for(const k of Object.keys(state.menus)){
+        d=(state.menus[k]||[]).find(x=>x.id===dishId);
+        if(d){console.warn('Found dish in different key:',k,'expected:',key);break;}
+      }
+    }
     if(d){
       document.getElementById('pNome').value=d.nome;
       document.getElementById('pNomeComanda').value=d.nomeComanda||'';
       document.getElementById('pNoteAI').value=d.noteAI||'';
       state.dishComponents=(d.components||[]).map(c=>({...c,flags:c.flags||[],compVariants:(c.compVariants||[]).map(cv=>({...cv,flags:[...(cv.flags||[])],ingredients:(cv.ingredients||[])})),ingredients:c.ingredients.map(i=>({...i,flags:[...i.flags]}))}));
+    } else {
+      showToast('⚠️ Piatto non trovato — i dati potrebbero essere desincronizzati, ricarica la pagina');
+      return;
     }
   }
   document.getElementById('modalPiattoTitle').textContent=dishId?'Modifica piatto':'Nuovo piatto';
@@ -2584,7 +2604,13 @@ async function loadFromFirestore(){
     const menusDoc = await db.collection('config').doc('menus').get();
     if(menusDoc.exists){
       const d = menusDoc.data();
-      if(d.menus){Object.keys(d.menus).forEach(k=>{state.menus[k]=d.menus[k]||[];});}
+      if(d.menus){
+        Object.keys(d.menus).forEach(k=>{
+          state.menus[k]=(d.menus[k]||[]);
+          // Normalize positions: sort and reassign to avoid duplicates
+          state.menus[k].sort((a,b)=>(a.pos||0)-(b.pos||0)).forEach((dish,i)=>dish.pos=i+1);
+        });
+      }
       if(d.archivedDishes) state.archivedDishes.push(...d.archivedDishes);
     }
 
