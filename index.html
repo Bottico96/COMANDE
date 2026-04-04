@@ -1610,11 +1610,15 @@ function renderMenuPanel(menuName,type){
     const flagHtml=allFlags.map(f=>{const info=getAllFlag(f);const cls=info?.type==='allergen'?'tag-allergen':info?.type==='warn'?'tag-warning':'tag-custom';return `<span class="dish-tag ${cls}">${esc(info?.label||f)}</span>`;}).join('');
     const isFirst=idx===0,isLast=idx===dishes.length-1;
     listHtml+=`<div class="dish-item" draggable="true" data-pos="${d.pos}" data-key="${key}">
-      <div style="display:flex;flex-direction:column;gap:2px;flex-shrink:0">
-        <button class="btn btn-ghost btn-xs" style="padding:2px 5px" onclick="event.stopPropagation();moveDish('${key}','${d.id}',-1)" ${isFirst?'disabled':''}>▲</button>
-        <button class="btn btn-ghost btn-xs" style="padding:2px 5px" onclick="event.stopPropagation();moveDish('${key}','${d.id}',1)" ${isLast?'disabled':''}>▼</button>
+      <div style="display:flex;flex-direction:column;align-items:center;gap:2px;flex-shrink:0">
+        <span style="font-size:9px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">pos</span>
+        <input type="number" min="1" max="99" value="${d.pos}" 
+          style="width:40px;text-align:center;border:1.5px solid var(--border);border-radius:var(--radius-sm);padding:3px 4px;font-size:13px;font-weight:600;color:var(--accent);background:var(--accent-light);font-family:'DM Sans',sans-serif;outline:none"
+          onclick="event.stopPropagation()"
+          onchange="event.stopPropagation();setDishPos('${key}','${d.id}',+this.value)"
+          onkeydown="if(event.key==='Enter'){event.stopPropagation();setDishPos('${key}','${d.id}',+this.value);this.blur()}"
+          title="Cambia posizione">
       </div>
-      <div class="dish-position ${isSec?'secondary':''}">${d.pos}</div>
       <div class="dish-info">
         <div class="dish-name">${esc(d.nome)}</div>
         ${d.nomeComanda&&d.nomeComanda!==d.nome?`<div class="dish-desc-short">📋 ${esc(d.nomeComanda)}</div>`:''}
@@ -1660,20 +1664,17 @@ function renderMenuPanel(menuName,type){
   });
 }
 
-function moveDish(key,dishId,dir){
+function setDishPos(key,dishId,newPos){
+  if(!newPos||newPos<1)return;
   const dishes=state.menus[key];
   if(!dishes)return;
-  const sorted=[...dishes].sort((a,b)=>a.pos-b.pos);
-  const idx=sorted.findIndex(d=>d.id===dishId);
-  if(idx<0)return;
-  const swapIdx=idx+dir;
-  if(swapIdx<0||swapIdx>=sorted.length)return;
-  const aId=sorted[idx].id, bId=sorted[swapIdx].id;
-  const ai=dishes.findIndex(d=>d.id===aId), bi=dishes.findIndex(d=>d.id===bId);
-  if(ai<0||bi<0)return;
-  const tmpPos=dishes[ai].pos;
-  dishes[ai].pos=dishes[bi].pos;
-  dishes[bi].pos=tmpPos;
+  const movingIdx=dishes.findIndex(d=>d.id===dishId);
+  if(movingIdx<0)return;
+  // If another dish has this position, swap with it
+  const conflictIdx=dishes.findIndex(d=>d.pos===newPos&&d.id!==dishId);
+  const oldPos=dishes[movingIdx].pos;
+  dishes[movingIdx].pos=newPos;
+  if(conflictIdx>=0)dishes[conflictIdx].pos=oldPos;
   const[menuName,type]=key.split('-');
   renderMenuPanel(menuName,type);
   if(typeof fbSaveMenus==='function')fbSaveMenus();
@@ -2509,14 +2510,21 @@ const db = firebase.firestore();
 let _firestoreUnsubscribes = [];
 
 let _suppressMenuListener=false;
+let _menuVersion=0; // local version counter
 
 function fbSaveMenus(){
   _suppressMenuListener=true;
+  _menuVersion++;
+  const savedVersion=_menuVersion;
   db.collection('config').doc('menus').set({
     menus: state.menus,
-    archivedDishes: state.archivedDishes
+    archivedDishes: state.archivedDishes,
+    _v: savedVersion
   }).then(()=>{
-    setTimeout(()=>_suppressMenuListener=false, 2000);
+    // Keep suppressed for 3s after save completes
+    setTimeout(()=>{
+      if(_menuVersion===savedVersion)_suppressMenuListener=false;
+    }, 3000);
   }).catch(e=>{console.error('fbSaveMenus',e);_suppressMenuListener=false;});
 }
 
@@ -2576,7 +2584,7 @@ async function loadFromFirestore(){
     const menusDoc = await db.collection('config').doc('menus').get();
     if(menusDoc.exists){
       const d = menusDoc.data();
-      if(d.menus) Object.assign(state.menus, d.menus);
+      if(d.menus){Object.keys(d.menus).forEach(k=>{state.menus[k]=d.menus[k]||[];});}
       if(d.archivedDishes) state.archivedDishes.push(...d.archivedDishes);
     }
 
@@ -2630,7 +2638,10 @@ function setupRealtimeListeners(){
     if(_suppressMenuListener) return;
     if(doc.exists){
       const d = doc.data();
-      if(d.menus) Object.assign(state.menus, d.menus);
+      // Only update if remote version is newer than what we saved
+      const remoteV = d._v||0;
+      if(remoteV < _menuVersion) return; // we have newer data locally
+      if(d.menus){Object.keys(d.menus).forEach(k=>{state.menus[k]=d.menus[k]||[];});}
       if(d.archivedDishes){
         state.archivedDishes.length = 0;
         state.archivedDishes.push(...d.archivedDishes);
