@@ -2431,30 +2431,51 @@ function renderStoricoPage(){
 // Recursively extract all .xlsx files from dropped items (supports folders)
 async function collectXlsxFiles(items){
   const files=[];
+
+  async function readAllEntries(reader){
+    // readEntries returns max 100 at a time — must loop until empty
+    const all=[];
+    while(true){
+      const batch=await new Promise((res,rej)=>reader.readEntries(res,rej));
+      if(!batch.length) break;
+      all.push(...batch);
+    }
+    return all;
+  }
+
   async function traverse(entry){
+    if(!entry) return;
     if(entry.isFile){
-      if(entry.name.endsWith('.xlsx')){
-        await new Promise(res=>entry.file(f=>{files.push(f);res();}));
+      if(entry.name.endsWith('.xlsx')&&!entry.name.startsWith('~$')){
+        const f=await new Promise((res,rej)=>entry.file(res,rej));
+        files.push(f);
       }
     } else if(entry.isDirectory){
       const reader=entry.createReader();
-      await new Promise(res=>{
-        reader.readEntries(async entries=>{
-          for(const e of entries) await traverse(e);
-          res();
-        });
-      });
+      const entries=await readAllEntries(reader);
+      for(const e of entries) await traverse(e);
     }
   }
+
   if(items instanceof FileList){
-    for(const f of items) if(f.name.endsWith('.xlsx')) files.push(f);
+    // From <input webkitdirectory> or multiple file select
+    for(const f of items){
+      if(f.name.endsWith('.xlsx')&&!f.name.startsWith('~$')) files.push(f);
+    }
   } else {
+    // From drag & drop DataTransferItemList
+    const entries=[];
     for(const item of items){
       const entry=item.webkitGetAsEntry?.();
-      if(entry) await traverse(entry);
-      else if(item.getAsFile){const f=item.getAsFile();if(f?.name.endsWith('.xlsx'))files.push(f);}
+      if(entry) entries.push(entry);
+      else if(item.getAsFile){
+        const f=item.getAsFile();
+        if(f?.name.endsWith('.xlsx')&&!f.name.startsWith('~$')) files.push(f);
+      }
     }
+    for(const entry of entries) await traverse(entry);
   }
+
   return files;
 }
 
@@ -2476,11 +2497,26 @@ async function handleStoricoFiles(items){
   const bar=document.getElementById('importBar');
   const msg=document.getElementById('importMsg');
   bar.style.background='var(--accent)';
-  bar.style.width='5%';
-  msg.textContent='Raccolta file...';
+  bar.style.width='3%';
+  msg.textContent='Raccolta file in corso...';
+
+  // Update count while collecting
+  const countInterval=setInterval(()=>{
+    msg.textContent=`Raccolta file... trovati finora: controllando sottocartelle`;
+  },500);
 
   const files=await collectXlsxFiles(items);
-  if(!files.length){msg.textContent='⚠️ Nessun file .xlsx trovato';return;}
+  clearInterval(countInterval);
+
+  if(!files.length){
+    msg.textContent='⚠️ Nessun file .xlsx trovato';
+    bar.style.width='100%';
+    bar.style.background='var(--danger)';
+    return;
+  }
+
+  bar.style.width='5%';
+  msg.textContent=`Trovati ${files.length} file .xlsx — avvio elaborazione...`;
 
   msg.textContent=`Trovati ${files.length} file — avvio elaborazione...`;
   
