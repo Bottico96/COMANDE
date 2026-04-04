@@ -305,7 +305,25 @@ header{height:var(--header-h);background:var(--surface);border-bottom:1px solid 
 /* variant badge shown in dish list */
 .variant-pill{display:inline-flex;align-items:center;font-size:10px;padding:2px 8px;border-radius:10px;background:var(--gold-light);color:var(--gold);border:1px solid #e0c878;font-weight:500;white-space:nowrap}
 
-/* ═══ COMANDA ═══ */
+/* ── RIEPILOGO TABLE ── */
+.riepilogo-table{width:100%;border-collapse:collapse;font-size:13px}
+.riepilogo-table th{background:var(--accent);color:#fff;padding:8px 12px;text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.06em;font-weight:600}
+.riepilogo-table td{padding:9px 12px;border-bottom:1px solid var(--border);vertical-align:top}
+.riepilogo-table tr:last-child td{border-bottom:none}
+.riepilogo-table tr:nth-child(even) td{background:var(--surface2)}
+.riepilogo-note{font-size:11px;color:var(--text-muted);font-style:italic;margin-top:2px}
+@media print{
+  body>*:not(#riepilogoPrintArea):not(#printArea){display:none!important}
+  #riepilogoPrintArea{display:block!important;position:fixed;inset:0;background:#fff;padding:12mm;font-family:'DM Sans',sans-serif}
+  .rp-header{margin-bottom:8mm;border-bottom:2px solid #333;padding-bottom:4mm}
+  .rp-title{font-size:18pt;font-weight:700;margin-bottom:2mm}
+  .rp-sub{font-size:10pt;color:#666}
+  .rp-table{width:100%;border-collapse:collapse;font-size:9pt}
+  .rp-table th{background:#2c4a2e;color:#fff;padding:3mm 4mm;text-align:left;font-size:8pt;text-transform:uppercase;letter-spacing:.04em}
+  .rp-table td{padding:2.5mm 4mm;border-bottom:0.5px solid #ccc;vertical-align:top}
+  .rp-table tr:nth-child(even) td{background:#f5f5f0}
+  .rp-note{font-size:7.5pt;color:#666;font-style:italic}
+}
 .comanda-overlay{position:fixed;inset:0;background:var(--bg);z-index:250;display:flex;flex-direction:column;animation:fadeUp .2s ease}
 .comanda-overlay.hidden{display:none}
 .comanda-topbar{height:56px;background:var(--surface);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:12px;padding:0 24px;flex-shrink:0;box-shadow:var(--shadow-sm)}
@@ -479,7 +497,10 @@ header{height:var(--header-h);background:var(--surface);border-bottom:1px solid 
     </div>
     <div class="section-header">
       <div class="section-title">Tavoli <small id="serviceLabel"></small></div>
-      <button class="btn btn-primary" id="btnAddTable">+ Aggiungi tavolo</button>
+      <div style="display:flex;gap:8px">
+        <button class="btn btn-ghost" id="btnRiepilogo">📄 Riepilogo serata</button>
+        <button class="btn btn-primary" id="btnAddTable">+ Aggiungi tavolo</button>
+      </div>
     </div>
     <div class="tables-grid" id="tablesGrid"></div>
   </div>
@@ -679,6 +700,22 @@ header{height:var(--header-h);background:var(--surface);border-bottom:1px solid 
   </div>
   <div id="crpBody"></div>
 </div>
+
+<!-- ══ MODAL RIEPILOGO SERATA ══ -->
+<div class="modal-overlay hidden" id="modalRiepilogo">
+  <div class="modal" style="max-width:720px">
+    <div class="modal-header">
+      <div><div class="modal-title">📄 Riepilogo serata</div><div class="modal-subtitle" id="riepilogoSubtitle"></div></div>
+      <button class="modal-close" id="modalRiepilogoClose">✕</button>
+    </div>
+    <div class="modal-body" id="riepilogoBody"></div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" id="btnRiepilogoClose2">Chiudi</button>
+      <button class="btn btn-primary" onclick="stampaRiepilogo()">🖨 Stampa / PDF</button>
+    </div>
+  </div>
+</div>
+<div id="riepilogoPrintArea" style="display:none"></div>
 
 <script>
 // ═══════════════════════════════════════════════════════
@@ -1594,7 +1631,12 @@ function renderMenuPanel(menuName,type){
   html+=`<div class="dish-list">${listHtml}</div>`;
   html+=`<div class="add-dish-area" onclick="openDishModal('${key}',null,null)">+ Aggiungi nuovo piatto</div>`;
   if(archived.length){
-    html+=`<div style="margin-top:20px"><div class="zone-label">Archivio piatti rimossi</div>${archived.map(d=>`<div style="display:flex;align-items:center;gap:10px;padding:8px 12px;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm);margin-bottom:5px"><div style="flex:1;font-size:13px;color:var(--text-secondary)">${esc(d.nome)}</div>${d.nomeComanda&&d.nomeComanda!==d.nome?`<span style="font-size:11px;color:var(--text-muted)">📋 ${esc(d.nomeComanda)}</span>`:''}<button class="btn btn-ghost btn-xs" onclick="restoreDish('${key}','${d.id}')">↩ Aggiungi al menu</button></div>`).join('')}</div>`;
+    html+=`<div style="margin-top:20px"><div class="zone-label">Archivio piatti rimossi</div>${archived.map(d=>`<div style="display:flex;align-items:center;gap:10px;padding:8px 12px;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm);margin-bottom:5px">
+      <div style="flex:1;font-size:13px;color:var(--text-secondary)">${esc(d.nome)}</div>
+      ${d.nomeComanda&&d.nomeComanda!==d.nome?`<span style="font-size:11px;color:var(--text-muted)">📋 ${esc(d.nomeComanda)}</span>`:''}
+      <button class="btn btn-ghost btn-xs" onclick="restoreDish('${key}','${d.id}')">↩ Aggiungi al menu</button>
+      <button class="btn btn-danger btn-xs" onclick="deleteArchivedDish('${d.id}')">🗑 Elimina</button>
+    </div>`).join('')}</div>`;
   }
   panel.innerHTML=html;
   panel.querySelectorAll('.dish-item[draggable]').forEach(item=>{
@@ -1855,6 +1897,7 @@ function buildComponentHTML(c,ci){
     <div class="ingredients-row">
       ${ingredientsHTML}
       <input type="text" class="ingredient-add-input" data-ci="${ci}" placeholder="+ ingrediente, Invio">
+      <button type="button" class="btn btn-ghost btn-xs" onclick="showImportComponentModal(${ci})" title="Importa ingredienti da un altro componente" style="font-size:11px;white-space:nowrap">⬇ Importa</button>
     </div>
     <div style="font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted);margin-top:4px">Tag rapidi componente:</div>
     <div class="ingredient-flags">${flagsToggleHTML}</div>
@@ -2274,9 +2317,147 @@ function showToast(msg,dur=2800){
 }
 
 // ═══════════════════════════════════════════════════════
+// RIEPILOGO SERATA
+// ═══════════════════════════════════════════════════════
+function openRiepilogo(){
+  const tables=getTables().slice().sort((a,b)=>(a.orario||'').localeCompare(b.orario||''));
+  const sub=(state.service==='cena'?'Cena':'Pranzo')+' — '+formatDateIT(state.selectedDate);
+  document.getElementById('riepilogoSubtitle').textContent=sub;
+
+  if(!tables.length){
+    document.getElementById('riepilogoBody').innerHTML=`<div style="text-align:center;padding:24px;color:var(--text-muted)">Nessun tavolo per questo servizio.</div>`;
+    document.getElementById('modalRiepilogo').classList.remove('hidden');
+    return;
+  }
+
+  let html=`<table class="riepilogo-table">
+    <thead><tr>
+      <th>N° Tav.</th><th>Orario</th><th>Nome</th><th>Ospiti</th><th>Menu</th><th>Telefono</th><th>Note</th>
+    </tr></thead><tbody>`;
+  tables.forEach(t=>{
+    const note=[t.noteGenerali,...(t.guests||[]).filter(g=>g).map((g,i)=>`Ospite ${i+1}: ${g}`)].filter(Boolean).join(' · ');
+    html+=`<tr>
+      <td><strong>${t.numeroTavolo||'—'}</strong></td>
+      <td>${t.orario||'—'}</td>
+      <td>${esc(t.nome)} ${esc(t.cognome)}</td>
+      <td style="text-align:center">${t.ospiti}</td>
+      <td>${t.menu?capitalize(t.menu):'—'}</td>
+      <td>${t.telefono?esc(t.telefono):'—'}</td>
+      <td>${note?`<span class="riepilogo-note">${esc(note)}</span>`:'—'}</td>
+    </tr>`;
+  });
+  html+=`</tbody></table>`;
+  html+=`<div style="margin-top:14px;font-size:12px;color:var(--text-muted)">Totale: <strong>${tables.length} tavoli</strong> · <strong>${tables.reduce((s,t)=>s+(+t.ospiti||0),0)} coperti</strong></div>`;
+  document.getElementById('riepilogoBody').innerHTML=html;
+  document.getElementById('modalRiepilogo').classList.remove('hidden');
+}
+
+function stampaRiepilogo(){
+  const tables=getTables().slice().sort((a,b)=>(a.orario||'').localeCompare(b.orario||''));
+  const sub=(state.service==='cena'?'Cena':'Pranzo')+' — '+formatDateIT(state.selectedDate);
+  let html=`<div class="rp-header"><div class="rp-title">Mise en Place — Riepilogo serata</div><div class="rp-sub">${sub}</div></div>
+  <table class="rp-table"><thead><tr>
+    <th>N° Tav.</th><th>Orario</th><th>Nome e Cognome</th><th>Ospiti</th><th>Menu</th><th>Telefono</th><th>Note generali</th>
+  </tr></thead><tbody>`;
+  tables.forEach(t=>{
+    const note=[t.noteGenerali,...(t.guests||[]).filter(g=>g).map((g,i)=>`Osp. ${i+1}: ${g}`)].filter(Boolean).join(' · ');
+    html+=`<tr>
+      <td><strong>${t.numeroTavolo||'—'}</strong></td>
+      <td>${t.orario||'—'}</td>
+      <td>${esc(t.nome)} ${esc(t.cognome)}</td>
+      <td style="text-align:center">${t.ospiti}</td>
+      <td>${t.menu?capitalize(t.menu):'—'}</td>
+      <td>${t.telefono?esc(t.telefono):'—'}</td>
+      <td><span class="rp-note">${note?esc(note):'—'}</span></td>
+    </tr>`;
+  });
+  html+=`</tbody></table>
+  <div style="margin-top:6mm;font-size:8pt;color:#666">Totale: ${tables.length} tavoli · ${tables.reduce((s,t)=>s+(+t.ospiti||0),0)} coperti</div>`;
+  document.getElementById('riepilogoPrintArea').innerHTML=html;
+  window.print();
+}
+
+// ═══════════════════════════════════════════════════════
+// ELIMINA PIATTO DALL'ARCHIVIO RIMOSSI
+// ═══════════════════════════════════════════════════════
+function deleteArchivedDish(dishId){
+  if(!confirm('Eliminare definitivamente questo piatto? L\'operazione è irreversibile.'))return;
+  const idx=state.archivedDishes.findIndex(d=>d.id===dishId);
+  if(idx<0)return;
+  state.archivedDishes.splice(idx,1);
+  if(typeof fbSaveMenus==='function')fbSaveMenus();
+  // Re-render current menu panel if open
+  if(state.page==='menu-riflesso')renderMenuPage('riflesso');
+  if(state.page==='menu-riflessioni')renderMenuPage('riflessioni');
+  showToast('🗑️ Piatto eliminato definitivamente');
+}
+
+// ═══════════════════════════════════════════════════════
+// IMPORTA COMPONENTE DA ALTRO PIATTO
+// ═══════════════════════════════════════════════════════
+function showImportComponentModal(ci){
+  // Collect all components from all dishes across all menus
+  const allComps=[];
+  Object.entries(state.menus).forEach(([menuKey,dishes])=>{
+    (dishes||[]).forEach(d=>{
+      (d.components||[]).forEach(c=>{
+        if(c.nome)allComps.push({label:`${d.nomeComanda||d.nome} → ${c.nome}`,component:c,menuKey,dishNome:d.nomeComanda||d.nome});
+      });
+    });
+  });
+
+  if(!allComps.length){showToast('⚠️ Nessun componente disponibile negli altri piatti');return;}
+
+  // Build a quick picker modal inline
+  const existing=document.getElementById('importCompModal');
+  if(existing)existing.remove();
+
+  const modal=document.createElement('div');
+  modal.id='importCompModal';
+  modal.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:400;display:flex;align-items:center;justify-content:center';
+  modal.innerHTML=`<div style="background:var(--surface);border-radius:var(--radius);padding:24px;max-width:480px;width:100%;max-height:80vh;overflow-y:auto;box-shadow:var(--shadow-lg)">
+    <div style="font-size:15px;font-weight:600;margin-bottom:4px">Importa componente</div>
+    <div style="font-size:12px;color:var(--text-muted);margin-bottom:16px">Seleziona un componente da un altro piatto — verrà aggiunto come sotto-componente con i suoi ingredienti</div>
+    <div style="display:flex;flex-direction:column;gap:6px">
+      ${allComps.map((item,ii)=>`
+        <button onclick="importComponent(${ci},${ii});document.getElementById('importCompModal').remove()" style="text-align:left;padding:10px 14px;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm);cursor:pointer;font-family:'DM Sans',sans-serif;font-size:12px;transition:all .13s" onmouseover="this.style.background='var(--accent-light)'" onmouseout="this.style.background='var(--surface2)'">
+          <div style="font-weight:500">${esc(item.component.nome)}</div>
+          <div style="font-size:11px;color:var(--text-muted);margin-top:2px">da <em>${esc(item.dishNome)}</em> · ${(item.component.ingredients||[]).length} ingredienti</div>
+        </button>`).join('')}
+    </div>
+    <button onclick="document.getElementById('importCompModal').remove()" class="btn btn-ghost btn-sm" style="margin-top:14px;width:100%">Annulla</button>
+  </div>`;
+  document.body.appendChild(modal);
+  // Store allComps for importComponent to access
+  window._importCompList=allComps;
+  modal.addEventListener('click',e=>{if(e.target===modal)modal.remove();});
+}
+
+function importComponent(targetCi, sourceIdx){
+  const source=window._importCompList?.[sourceIdx];
+  if(!source)return;
+  // Deep copy the component and add as an ingredient group note
+  const comp=source.component;
+  // Add each ingredient of the source component as an ingredient in the target
+  (comp.ingredients||[]).filter(i=>!i._quickFlag).forEach(ing=>{
+    state.dishComponents[targetCi].ingredients.push({
+      id:'I'+(nextIngId++),
+      nome:`[${comp.nome}] ${ing.nome}`,
+      flags:[...(ing.flags||[])],
+      removability:ing.removability||'fondamentale'
+    });
+  });
+  renderComponentsList();
+  showToast(`✅ Ingredienti di "${comp.nome}" importati`);
+}
+
+// ═══════════════════════════════════════════════════════
 // EVENTS
 // ═══════════════════════════════════════════════════════
 document.getElementById('btnAddTable').addEventListener('click',()=>openTableModal());
+document.getElementById('btnRiepilogo').addEventListener('click',openRiepilogo);
+document.getElementById('modalRiepilogoClose').addEventListener('click',()=>document.getElementById('modalRiepilogo').classList.add('hidden'));
+document.getElementById('btnRiepilogoClose2').addEventListener('click',()=>document.getElementById('modalRiepilogo').classList.add('hidden'));
 document.getElementById('modalTavoloClose').addEventListener('click',closeTableModal);
 document.getElementById('btnTavoloCancel').addEventListener('click',closeTableModal);
 document.getElementById('btnTavoloSave').addEventListener('click',saveTable);
