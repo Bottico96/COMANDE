@@ -1574,8 +1574,8 @@ function renderMenuPanel(menuName,type){
     const isFirst=idx===0,isLast=idx===dishes.length-1;
     listHtml+=`<div class="dish-item" draggable="true" data-pos="${d.pos}" data-key="${key}">
       <div style="display:flex;flex-direction:column;gap:2px;flex-shrink:0">
-        <button class="btn btn-ghost btn-xs" style="padding:2px 5px" onclick="moveDish('${key}','${d.id}',-1)" ${isFirst?'disabled':''}>▲</button>
-        <button class="btn btn-ghost btn-xs" style="padding:2px 5px" onclick="moveDish('${key}','${d.id}',1)" ${isLast?'disabled':''}>▼</button>
+        <button class="btn btn-ghost btn-xs" style="padding:2px 5px" onclick="event.stopPropagation();moveDish('${key}','${d.id}',-1)" ${isFirst?'disabled':''}>▲</button>
+        <button class="btn btn-ghost btn-xs" style="padding:2px 5px" onclick="event.stopPropagation();moveDish('${key}','${d.id}',1)" ${isLast?'disabled':''}>▼</button>
       </div>
       <div class="dish-position ${isSec?'secondary':''}">${d.pos}</div>
       <div class="dish-info">
@@ -1598,7 +1598,11 @@ function renderMenuPanel(menuName,type){
   }
   panel.innerHTML=html;
   panel.querySelectorAll('.dish-item[draggable]').forEach(item=>{
-    item.addEventListener('dragstart',e=>{state.dragSrc={key,pos:+item.dataset.pos};item.style.opacity='.4';e.dataTransfer.effectAllowed='move';});
+    item.addEventListener('dragstart',e=>{
+      // Don't drag if user clicked a button
+      if(e.target.closest('button'))return e.preventDefault();
+      state.dragSrc={key,pos:+item.dataset.pos};item.style.opacity='.4';e.dataTransfer.effectAllowed='move';
+    });
     item.addEventListener('dragend',()=>item.style.opacity='1');
     item.addEventListener('dragover',e=>{e.preventDefault();item.classList.add('drag-over');});
     item.addEventListener('dragleave',()=>item.classList.remove('drag-over'));
@@ -1609,16 +1613,21 @@ function renderMenuPanel(menuName,type){
       const si=dd.findIndex(x=>x.pos===srcPos),di=dd.findIndex(x=>x.pos===dstPos);
       if(si>=0&&di>=0)[dd[si].pos,dd[di].pos]=[dd[di].pos,dd[si].pos];
       renderMenuPanel(menuName,type);
+      if(typeof fbSaveMenus==='function')fbSaveMenus();
     });
   });
 }
 
 function moveDish(key,dishId,dir){
-  const dishes=(state.menus[key]||[]).slice().sort((a,b)=>a.pos-b.pos);
-  const idx=dishes.findIndex(d=>d.id===dishId);
+  const dishes=state.menus[key]||[];
+  const sorted=[...dishes].sort((a,b)=>a.pos-b.pos);
+  const idx=sorted.findIndex(d=>d.id===dishId);
   const swapIdx=idx+dir;
-  if(swapIdx<0||swapIdx>=dishes.length)return;
-  [dishes[idx].pos,dishes[swapIdx].pos]=[dishes[swapIdx].pos,dishes[idx].pos];
+  if(swapIdx<0||swapIdx>=sorted.length)return;
+  // Swap positions in the ORIGINAL array
+  const aId=sorted[idx].id, bId=sorted[swapIdx].id;
+  const ai=dishes.findIndex(d=>d.id===aId), bi=dishes.findIndex(d=>d.id===bId);
+  [dishes[ai].pos,dishes[bi].pos]=[dishes[bi].pos,dishes[ai].pos];
   const[menuName,type]=key.split('-');
   renderMenuPanel(menuName,type);
   if(typeof fbSaveMenus==='function')fbSaveMenus();
@@ -2276,7 +2285,12 @@ document.getElementById('modalPiattoClose').addEventListener('click',closeDishMo
 document.getElementById('btnPiattoCancel').addEventListener('click',closeDishModal);
 document.getElementById('btnPiattoSave').addEventListener('click',saveDish);
 document.getElementById('modalPiatto').addEventListener('click',e=>{if(e.target.id==='modalPiatto')closeDishModal();});
-document.addEventListener('keydown',e=>{if(e.key==='Escape'){closeTableModal();closeDishModal();}});
+document.addEventListener('keydown',e=>{
+  if(e.key==='Escape'){
+    if(!document.getElementById('modalTavolo').classList.contains('hidden'))closeTableModal();
+    if(!document.getElementById('modalPiatto').classList.contains('hidden'))closeDishModal();
+  }
+});
 
 // ═══════════════════════════════════════════════════════
 // FIREBASE — realtime sync
