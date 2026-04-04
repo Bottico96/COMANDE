@@ -2401,7 +2401,10 @@ function renderStoricoPage(){
           <div style="height:6px;background:var(--border);border-radius:3px;overflow:hidden">
             <div id="importBar" style="height:100%;background:var(--accent);width:0%;transition:width .3s"></div>
           </div>
-          <div id="importMsg" style="font-size:12px;color:var(--text-muted);margin-top:6px"></div>
+          <div style="display:flex;align-items:center;gap:10px;margin-top:6px">
+            <div id="importMsg" style="font-size:12px;color:var(--text-muted);flex:1"></div>
+            <button class="btn btn-danger btn-xs" id="btnAnnullaImport" onclick="annullaImport()">✕ Annulla</button>
+          </div>
         </div>
       </div>
 
@@ -2454,6 +2457,19 @@ async function collectXlsxFiles(items){
   return files;
 }
 
+let _importAborted=false;
+function annullaImport(){
+  _importAborted=true;
+  const msg=document.getElementById('importMsg');
+  const bar=document.getElementById('importBar');
+  if(msg)msg.textContent='⏹ Importazione annullata';
+  if(bar)bar.style.background='var(--danger)';
+  setTimeout(()=>{
+    document.getElementById('importProgress').style.display='none';
+    _importAborted=false;
+  },2000);
+}
+
 async function handleStoricoFiles(items){
   document.getElementById('importProgress').style.display='block';
   const bar=document.getElementById('importBar');
@@ -2474,11 +2490,21 @@ async function handleStoricoFiles(items){
   let processed=0;
   let errors=0;
 
+  _importAborted=false;
+  let startTime=Date.now();
   for(const file of files){
+    if(_importAborted)break;
     processed++;
     const pct=Math.round((processed/files.length)*85)+5;
     bar.style.width=pct+'%';
-    msg.textContent=`Elaborazione ${processed}/${files.length}: ${file.name}`;
+    
+    // Calculate ETA
+    const elapsed=(Date.now()-startTime)/1000;
+    const avgSec=elapsed/processed;
+    const remaining=Math.round(avgSec*(files.length-processed));
+    const etaStr=processed>1?(remaining>60?`~${Math.round(remaining/60)} min`:`~${remaining} sec`):' ';
+    
+    msg.textContent=`${processed}/${files.length} — ${file.name} ${etaStr?`· rimangono ${etaStr}`:'...'}`;
 
     try{
       const arrayBuffer=await file.arrayBuffer();
