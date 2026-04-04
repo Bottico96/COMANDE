@@ -2091,7 +2091,7 @@ function saveDish(){
       // Position taken: push to end
       pos=(dishes.length?Math.max(...dishes.map(d=>d.pos)):0)+1;
     }
-    dishes.push({...obj,id:'D'+(nextDishId++),pos});
+    dishes.push({...obj,id:'D'+Date.now()+'_'+Math.random().toString(36).slice(2,7),pos});
     showToast('✅ Piatto aggiunto');
   }
   state.menus[key]=dishes;
@@ -2492,7 +2492,13 @@ document.getElementById('modalTavolo').addEventListener('click',e=>{if(e.target.
 document.getElementById('modalPiattoClose').addEventListener('click',closeDishModal);
 document.getElementById('btnPiattoCancel').addEventListener('click',closeDishModal);
 document.getElementById('btnPiattoSave').addEventListener('click',saveDish);
-document.getElementById('modalPiatto').addEventListener('click',e=>{if(e.target.id==='modalPiatto')closeDishModal();});
+document.getElementById('modalPiatto').addEventListener('mousedown',e=>{
+  if(e.target.id==='modalPiatto') e.currentTarget._closeOnUp=true;
+});
+document.getElementById('modalPiatto').addEventListener('mouseup',e=>{
+  if(e.currentTarget._closeOnUp && e.target.id==='modalPiatto') closeDishModal();
+  e.currentTarget._closeOnUp=false;
+});
 document.addEventListener('keydown',e=>{
   if(e.key==='Escape'){
     if(!document.getElementById('modalTavolo').classList.contains('hidden'))closeTableModal();
