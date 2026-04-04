@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Mise en Place</title>
 <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;1,300;1,400&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 :root{
@@ -2508,7 +2509,28 @@ async function handleStoricoFiles(items){
 
     try{
       const arrayBuffer=await file.arrayBuffer();
-      const base64=btoa(String.fromCharCode(...new Uint8Array(arrayBuffer)));
+      
+      // Parse Excel with SheetJS to extract text content
+      let excelText='';
+      try{
+        const XLSX=window.XLSX;
+        if(!XLSX) throw new Error('SheetJS not loaded');
+        const wb=XLSX.read(arrayBuffer,{type:'array'});
+        // Extract all sheets as text, focus on alternative/menu sheets
+        for(const shName of wb.SheetNames){
+          const ws=wb.Sheets[shName];
+          const csv=XLSX.utils.sheet_to_csv(ws,{skipHidden:true});
+          // Only include non-empty sheets with meaningful content
+          const lines=csv.split('\n').filter(l=>l.replace(/,/g,'').trim());
+          if(lines.length>2) excelText+=`\n=== FOGLIO: ${shName} ===\n${lines.join('\n')}`;
+        }
+      }catch(e){
+        console.warn('SheetJS parse failed',e);
+        // Fallback: try reading as text
+        excelText='[Impossibile leggere il file]';
+      }
+
+      if(!excelText||excelText.length<50){errors++;continue;}
 
       const resp=await fetch('https://api.anthropic.com/v1/messages',{
         method:'POST',
@@ -2518,15 +2540,16 @@ async function handleStoricoFiles(items){
           max_tokens:3000,
           messages:[{
             role:'user',
-            content:[
-              {type:'document',source:{type:'base64',media_type:'application/pdf',data:base64}},
-              {type:'text',text:`File Excel comande ristorante fine dining.
+            content:[{type:'text',text:`Questo è il contenuto testuale di un file Excel di comande di un ristorante fine dining.
 Cerca il foglio con le alternative per restrizioni (es. "MENU' RIFLESSO E ALTERNATIVE" o simile).
-Estrai TUTTI i pattern: piatto titolare + tipo restrizione → piatto/variante alternativa.
+Quella tabella ha una colonna con i piatti titolari e colonne per ogni tipo di restrizione (vegetariano, no glutine, no lattosio, no carne, no pesce, no uova, no molluschi, no crostacei, ecc).
+Estrai TUTTI i pattern: per ogni piatto e ogni restrizione, qual è l'alternativa servita.
 
-Rispondi SOLO con JSON:
-{"pattern_sostituzione":[{"piatto_titolare":"...","restrizione":"...","alternativa":"..."}]}`}
-            ]
+Contenuto Excel:
+${excelText.slice(0,8000)}
+
+Rispondi SOLO con JSON (niente altro):
+{"pattern_sostituzione":[{"piatto_titolare":"...","restrizione":"...","alternativa":"..."}]}`}]
           }]
         })
       });
