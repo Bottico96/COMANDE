@@ -657,7 +657,7 @@ header{height:var(--header-h);background:var(--surface);border-bottom:1px solid 
         <div class="components-list" id="componentsList"></div>
         <div style="margin-top:10px;font-size:11px;color:var(--text-muted);display:flex;gap:16px;flex-wrap:wrap">
           <span><span class="rb-fondamentale removability-badge" style="pointer-events:none">🔒 fondamentale</span> — non si può togliere</span>
-          <span><span class="rb-modificabile removability-badge" style="pointer-events:none">✏️ modificabile</span> — adattabile</span>
+          <span><span class="rb-modificabile removability-badge" style="pointer-events:none">✏️ modificabile</span> — ha varianti componente</span>
           <span><span class="rb-opzionale removability-badge" style="pointer-events:none">✂️ opzionale</span> — si può togliere</span>
         </div>
       </div>
@@ -1051,7 +1051,7 @@ OSPITI CON RESTRIZIONI:
 ${guestsCtx}
 
 MENU TITOLARE (${menu}) — ${titolare.length} piatti:
-Legenda ingredienti: F=fondamentale, M=modificabile, O=opzionale; CV=variante componente
+Legenda ingredienti: F=fondamentale (non si toglie), O=opzionale (si può togliere); componente M=modificabile significa che ha varianti componente (CV) — scegli la CV compatibile
 ${dishesCtx}
 
 MENU SECONDARIO:
@@ -1060,7 +1060,7 @@ ${secondaryCtx}
 REGOLE:
 - Ragiona come cuoco esperto, non keyword matching
 - Se ingrediente non si percepisce (dalle note), non è un problema
-- Gerarchia: 1) ingrediente O si toglie → nota "no X" 2) ingrediente M si adatta 3) variante componente (CV) compatibile 4) piatto secondario (stesso menu secondario)
+- Gerarchia: 1) ingrediente O → si toglie, nota "no X" 2) componente M (ha varianti) → scegli la CV compatibile 3) piatto secondario
 - Le varianti piatto sono in ORDINE DI PRIORITÀ: scegli sempre la PRIMA variante compatibile nella lista
 - Per gravidanza: crudo (carne/pesce/uova/formaggi crudi), alcol, formaggi molli
 - Buon senso su intensità: tracce non contano, presenza dominante sì
@@ -1661,15 +1661,19 @@ function renderMenuPanel(menuName,type){
 }
 
 function moveDish(key,dishId,dir){
-  const dishes=state.menus[key]||[];
+  const dishes=state.menus[key];
+  if(!dishes)return;
   const sorted=[...dishes].sort((a,b)=>a.pos-b.pos);
   const idx=sorted.findIndex(d=>d.id===dishId);
+  if(idx<0)return;
   const swapIdx=idx+dir;
   if(swapIdx<0||swapIdx>=sorted.length)return;
-  // Swap positions in the ORIGINAL array
   const aId=sorted[idx].id, bId=sorted[swapIdx].id;
   const ai=dishes.findIndex(d=>d.id===aId), bi=dishes.findIndex(d=>d.id===bId);
-  [dishes[ai].pos,dishes[bi].pos]=[dishes[bi].pos,dishes[ai].pos];
+  if(ai<0||bi<0)return;
+  const tmpPos=dishes[ai].pos;
+  dishes[ai].pos=dishes[bi].pos;
+  dishes[bi].pos=tmpPos;
   const[menuName,type]=key.split('-');
   renderMenuPanel(menuName,type);
   if(typeof fbSaveMenus==='function')fbSaveMenus();
@@ -1813,8 +1817,10 @@ function renderComponentsList(){
 }
 
 function buildComponentHTML(c,ci){
-  const rbClass={'fondamentale':'rb-fondamentale','modificabile':'rb-modificabile','opzionale':'rb-opzionale'}[c.removability]||'rb-fondamentale';
-  const rbLabel={'fondamentale':'🔒 fondamentale','modificabile':'✏️ modificabile','opzionale':'✂️ opzionale'}[c.removability]||'🔒 fondamentale';
+  const hasVariants=(c.compVariants||[]).length>0;
+  const effRem=hasVariants?'modificabile':c.removability||'fondamentale';
+  const rbClass={'fondamentale':'rb-fondamentale','modificabile':'rb-modificabile','opzionale':'rb-opzionale'}[effRem]||'rb-fondamentale';
+  const rbLabel={'fondamentale':'🔒 fondamentale','modificabile':'✏️ modificabile','opzionale':'✂️ opzionale'}[effRem]||'🔒 fondamentale';
 
   const ingredientsHTML=c.ingredients.filter(ing=>!ing._quickFlag).map((ing,ii)=>{
     const hasAllergen=ing.flags.some(f=>getAllFlag(f)?.type==='allergen');
@@ -1825,11 +1831,11 @@ function buildComponentHTML(c,ci){
     }).join(' ');
     // ingredient removability badge
     const iRem=ing.removability||'fondamentale';
-    const iRemLabel={'fondamentale':'🔒','modificabile':'✏️','opzionale':'✂️'}[iRem];
-    const iRemCls={'fondamentale':'','modificabile':'has-warn','opzionale':''}[iRem];
+    const iRemLabel={'fondamentale':'🔒','modificabile':'🔒','opzionale':'✂️'}[iRem];
+    const iRemCls={'fondamentale':'','modificabile':'','opzionale':''}[iRem];
     return `<span class="ingredient-chip ${iRemCls}" data-ci="${ci}" data-ii="${ii}" style="align-items:flex-start;flex-direction:column;gap:2px;padding:4px 8px">
       <span style="display:flex;align-items:center;gap:4px">
-        <button type="button" class="ing-rem-btn" onclick="cycleIngRem(${ci},${ii})" title="Clicca per cambiare: fondamentale → modificabile → opzionale" style="background:none;border:none;cursor:pointer;padding:0;font-size:11px;line-height:1">${iRemLabel}</button>
+        <button type="button" class="ing-rem-btn" onclick="cycleIngRem(${ci},${ii})" title="Clicca per cambiare: fondamentale ↔ opzionale" style="background:none;border:none;cursor:pointer;padding:0;font-size:11px;line-height:1">${iRemLabel}</button>
         <span>${esc(ing.nome)}</span>
         <button type="button" onclick="removeIngredient(${ci},${ii})" title="Rimuovi" style="background:none;border:none;cursor:pointer;color:var(--text-muted);font-size:12px;padding:0;line-height:1;margin-left:2px">×</button>
       </span>
@@ -1851,8 +1857,8 @@ function buildComponentHTML(c,ci){
     if(!cv.flags)cv.flags=[];
     const cvIngsHTML=cv.ingredients.map((ing,ii)=>{
       const rem=ing.removability||'fondamentale';
-      const remLabel={'fondamentale':'🔒','modificabile':'✏️','opzionale':'✂️'}[rem];
-      const remCls={'fondamentale':'','modificabile':'has-warn','opzionale':''}[rem];
+      const remLabel={'fondamentale':'🔒','modificabile':'🔒','opzionale':'✂️'}[rem];
+      const remCls={'fondamentale':'','modificabile':'','opzionale':''}[rem];
       return `<span class="ingredient-chip ${remCls}" style="font-size:11px;padding:4px 8px;flex-direction:column;gap:2px;align-items:flex-start">
         <span style="display:flex;align-items:center;gap:4px">
           <button type="button" onclick="cycleCompVariantIngRem(${ci},${cvi},${ii})" title="Clicca per cambiare rimuovibilità" style="background:none;border:none;cursor:pointer;padding:0;font-size:11px;line-height:1">${remLabel}</button>
@@ -1920,20 +1926,13 @@ function addComponent(){
 function removeComponent(ci){state.dishComponents.splice(ci,1);renderComponentsList();}
 
 function cycleRemovability(ci){
-  const order=['fondamentale','modificabile','opzionale'];
-  const curr=state.dishComponents[ci].removability;
-  const next=order[(order.indexOf(curr)+1)%3];
-  state.dishComponents[ci].removability=next;
-  // If component becomes opzionale, all its ingredients become opzionale
-  // If it moves away from opzionale and any ingredient was auto-set to opzionale, keep as-is (user can change manually)
+  const comp=state.dishComponents[ci];
+  const curr=comp.removability||'fondamentale';
+  const next=curr==='fondamentale'?'opzionale':'fondamentale';
+  comp.removability=next;
+  // If opzionale, all fondamentale ingredients become opzionale too
   if(next==='opzionale'){
-    state.dishComponents[ci].ingredients.forEach(ing=>{
-      if(ing.removability==='fondamentale')ing.removability='opzionale';
-    });
-  }
-  // A component can't be opzionale if any ingredient is modificabile — upgrade to modificabile
-  if(next==='opzionale'&&state.dishComponents[ci].ingredients.some(i=>i.removability==='modificabile')){
-    state.dishComponents[ci].removability='modificabile';
+    comp.ingredients.forEach(ing=>{if(ing.removability==='fondamentale')ing.removability='opzionale';});
   }
   renderComponentsList();
 }
@@ -1975,10 +1974,8 @@ function removeCompVariantIng(ci,cvi,ii){
 }
 
 function cycleCompVariantIngRem(ci,cvi,ii){
-  const order=['fondamentale','modificabile','opzionale'];
   const ing=state.dishComponents[ci].compVariants[cvi].ingredients[ii];
-  const curr=ing.removability||'fondamentale';
-  ing.removability=order[(order.indexOf(curr)+1)%3];
+  ing.removability=(ing.removability||'fondamentale')==='fondamentale'?'opzionale':'fondamentale';
   renderComponentsList();
 }
 
@@ -2415,22 +2412,31 @@ function showImportComponentModal(ci){
   const modal=document.createElement('div');
   modal.id='importCompModal';
   modal.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:400;display:flex;align-items:center;justify-content:center';
-  modal.innerHTML=`<div style="background:var(--surface);border-radius:var(--radius);padding:24px;max-width:480px;width:100%;max-height:80vh;overflow-y:auto;box-shadow:var(--shadow-lg)">
+  modal.innerHTML=`<div style="background:var(--surface);border-radius:var(--radius);padding:24px;max-width:500px;width:100%;max-height:82vh;display:flex;flex-direction:column;box-shadow:var(--shadow-lg)">
     <div style="font-size:15px;font-weight:600;margin-bottom:4px">Importa componente</div>
-    <div style="font-size:12px;color:var(--text-muted);margin-bottom:16px">Seleziona un componente da un altro piatto — verrà aggiunto come sotto-componente con i suoi ingredienti</div>
-    <div style="display:flex;flex-direction:column;gap:6px">
+    <div style="font-size:12px;color:var(--text-muted);margin-bottom:12px">Seleziona un componente da un altro piatto — i suoi ingredienti vengono copiati</div>
+    <input type="text" id="importCompSearch" class="form-input" placeholder="🔍 Cerca componente o piatto…" style="margin-bottom:10px;padding:8px 12px;font-size:13px">
+    <div id="importCompList" style="overflow-y:auto;flex:1;display:flex;flex-direction:column;gap:5px">
       ${allComps.map((item,ii)=>`
-        <button onclick="importComponent(${ci},${ii});document.getElementById('importCompModal').remove()" style="text-align:left;padding:10px 14px;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm);cursor:pointer;font-family:'DM Sans',sans-serif;font-size:12px;transition:all .13s" onmouseover="this.style.background='var(--accent-light)'" onmouseout="this.style.background='var(--surface2)'">
+        <button class="import-comp-btn" data-ii="${ii}" data-search="${(item.component.nome+' '+item.dishNome).toLowerCase()}" onclick="importComponent(${ci},${ii});document.getElementById('importCompModal').remove()" style="text-align:left;padding:10px 14px;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm);cursor:pointer;font-family:'DM Sans',sans-serif;font-size:12px;transition:all .13s" onmouseover="this.style.background='var(--accent-light)'" onmouseout="this.style.background='var(--surface2)'">
           <div style="font-weight:500">${esc(item.component.nome)}</div>
-          <div style="font-size:11px;color:var(--text-muted);margin-top:2px">da <em>${esc(item.dishNome)}</em> · ${(item.component.ingredients||[]).length} ingredienti</div>
+          <div style="font-size:11px;color:var(--text-muted);margin-top:2px">da <em>${esc(item.dishNome)}</em> · ${(item.component.ingredients||[]).length} ingredienti${(item.component.ingredients||[]).length?': '+item.component.ingredients.slice(0,3).map(i=>esc(i.nome)).join(', ')+(item.component.ingredients.length>3?'…':''):''}</div>
         </button>`).join('')}
     </div>
-    <button onclick="document.getElementById('importCompModal').remove()" class="btn btn-ghost btn-sm" style="margin-top:14px;width:100%">Annulla</button>
+    <button onclick="document.getElementById('importCompModal').remove()" class="btn btn-ghost btn-sm" style="margin-top:12px">Annulla</button>
   </div>`;
   document.body.appendChild(modal);
-  // Store allComps for importComponent to access
   window._importCompList=allComps;
   modal.addEventListener('click',e=>{if(e.target===modal)modal.remove();});
+  // Search filter
+  const searchInp=document.getElementById('importCompSearch');
+  searchInp?.addEventListener('input',()=>{
+    const q=searchInp.value.toLowerCase().trim();
+    document.querySelectorAll('.import-comp-btn').forEach(btn=>{
+      btn.style.display=(!q||btn.dataset.search.includes(q))?'':'none';
+    });
+  });
+  setTimeout(()=>searchInp?.focus(),80);
 }
 
 function importComponent(targetCi, sourceIdx){
