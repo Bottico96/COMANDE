@@ -659,11 +659,11 @@ header{height:var(--header-h);background:var(--surface);border-bottom:1px solid 
       </div>
       <!-- Componenti -->
       <div class="form-group">
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+        <div style="margin-bottom:8px">
           <label class="form-label" style="margin:0">Componenti del piatto</label>
-          <button class="btn btn-ghost btn-xs" id="btnAddComponent">+ Aggiungi componente</button>
         </div>
         <div class="components-list" id="componentsList"></div>
+        <button class="btn btn-ghost btn-sm" id="btnAddComponent" style="width:100%;margin-top:8px;border:2px dashed var(--border);border-radius:var(--radius)">+ Aggiungi componente</button>
         <div style="margin-top:10px;font-size:11px;color:var(--text-muted);display:flex;gap:16px;flex-wrap:wrap">
           <span><span class="rb-fondamentale removability-badge" style="pointer-events:none">🔒 fondamentale</span> — non si può togliere</span>
           <span><span class="rb-modificabile removability-badge" style="pointer-events:none">✏️ modificabile</span> — ha varianti componente</span>
@@ -684,6 +684,7 @@ header{height:var(--header-h);background:var(--surface);border-bottom:1px solid 
     <div class="comanda-topbar-title" id="comandaTopTitle"></div>
     <button class="btn btn-ghost btn-sm" id="btnToggleEditComanda">✏️ Modifica</button>
     <button class="btn btn-ghost btn-sm" id="btnAddComandaCol">+ Colonna</button>
+    <button class="btn btn-ghost btn-sm" id="btnInviaMenu">✉️ Invia menu</button>
     <button class="btn btn-primary btn-sm" id="btnStampaComanda">🖨 Stampa</button>
   </div>
   <div class="comanda-body">
@@ -725,6 +726,21 @@ header{height:var(--header-h);background:var(--surface);border-bottom:1px solid 
   </div>
 </div>
 <div id="riepilogoPrintArea" style="display:none"></div>
+
+<!-- ══ MODAL INVIA MENU ══ -->
+<div class="modal-overlay hidden" id="modalInviaMenu">
+  <div class="modal" style="max-width:520px">
+    <div class="modal-header">
+      <div><div class="modal-title">✉️ Invia menu al cliente</div><div class="modal-subtitle" id="inviaMenuSubtitle"></div></div>
+      <button class="modal-close" onclick="document.getElementById('modalInviaMenu').classList.add('hidden')">✕</button>
+    </div>
+    <div class="modal-body" id="inviaMenuBody"></div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="document.getElementById('modalInviaMenu').classList.add('hidden')">Annulla</button>
+      <button class="btn btn-primary" id="btnConfermaInvio">✉️ Invia</button>
+    </div>
+  </div>
+</div>
 
 <script>
 // ═══════════════════════════════════════════════════════
@@ -1572,6 +1588,7 @@ function closeReasonPopup(){
 document.getElementById('btnCloseComanda').addEventListener('click',closeComanda);
 document.getElementById('btnAddComandaCol').addEventListener('click',addComandaCol);
 document.getElementById('btnStampaComanda').addEventListener('click',stampaComanda);
+document.getElementById('btnInviaMenu').addEventListener('click',inviaMenuEmail);
 document.getElementById('btnToggleEditComanda').addEventListener('click',()=>{
   state.comandaEditMode=!state.comandaEditMode;
   if(!state.comandaEditMode){
@@ -1987,9 +2004,9 @@ function addIngredient(ci,nome){
 }
 function removeIngredient(ci,ii){state.dishComponents[ci].ingredients.splice(ii,1);renderComponentsList();}
 function cycleIngRem(ci,ii){
-  const order=['fondamentale','modificabile','opzionale'];
-  const curr=state.dishComponents[ci].ingredients[ii].removability||'fondamentale';
-  state.dishComponents[ci].ingredients[ii].removability=order[(order.indexOf(curr)+1)%3];
+  const ing=state.dishComponents[ci].ingredients[ii];
+  const curr=ing.removability||'fondamentale';
+  ing.removability=(curr==='fondamentale'||curr==='modificabile')?'opzionale':'fondamentale';
   renderComponentsList();
 }
 
@@ -2650,6 +2667,126 @@ function buildRAGContext(){
   return ctx;
 }
 // ═══════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════
+// INVIA MENU VIA EMAIL — genera HTML menu + Gmail
+// ═══════════════════════════════════════════════════════
+
+function buildMenuVariants(table){
+  const c=table.comanda;
+  if(!c||!c.rows)return[];
+  const maxCols=Math.max(...c.rows.map(r=>r.cols.length),1);
+
+  function getDishPoetic(nomeComanda){
+    for(const key of Object.keys(state.menus)){
+      const found=(state.menus[key]||[]).find(d=>
+        d.nomeComanda===nomeComanda||d.nome===nomeComanda
+      );
+      if(found)return found.nome||found.nomeComanda;
+    }
+    return nomeComanda;
+  }
+
+  const variants=[];
+  const stdPiatti=c.rows.filter(r=>(r.cols[0]?.qty||0)>0).map(r=>getDishPoetic(r.nome));
+  if(stdPiatti.length)variants.push({label:'Standard',piatti:stdPiatti});
+
+  for(let ci=1;ci<maxCols;ci++){
+    const piatti=c.rows.map(r=>{
+      const col=r.cols[ci];
+      if(!col||(col.qty||0)===0)return null;
+      const nome=col.label&&col.label!==''?col.label:getDishPoetic(r.nome);
+      return getDishPoetic(nome)||nome;
+    }).filter(Boolean);
+    if(piatti.length){
+      const lbl=c.rows.find(r=>r.cols[ci]?.label)?.cols[ci]?.label||`Variante ${ci}`;
+      variants.push({label:lbl,piatti});
+    }
+  }
+  return variants;
+}
+
+function buildMenuEmailHtml(table, variants, dataIT){
+  const nomeCliente=`${table.nome||''} ${table.cognome||''}`.trim();
+  const gen=table.nome?.endsWith('a')?'a':'o';
+
+  let menuBlocks='';
+  variants.forEach(v=>{
+    const piattiHtml=v.piatti.map(p=>`<p style="margin:8px 0;font-size:15px;font-family:Georgia,serif">${esc(p)}</p>`).join('');
+    menuBlocks+=`<div style="background:#6B1A2A;color:#fff;padding:48px 40px;text-align:center;margin-bottom:16px">
+      <p style="font-size:9px;letter-spacing:3px;opacity:.65;margin:0 0 6px;font-family:Arial,sans-serif">POCO O NULLA CI IMPEDISCE DI RICORDARE, MOLTO O TUTTO DI DIMENTICARE</p>
+      <h1 style="font-family:Arial,sans-serif;font-size:52px;margin:0 0 10px;letter-spacing:1px;font-weight:900">NEXT DAY MENU</h1>
+      <p style="font-size:12px;opacity:.85;margin:0 0 28px;font-family:Arial,sans-serif;letter-spacing:1px">${dataIT.toUpperCase()}</p>
+      <div style="width:80px;height:1px;background:rgba(255,255,255,0.35);margin:0 auto 32px"></div>
+      ${piattiHtml}
+      <p style="margin-top:44px;font-family:Georgia,serif;font-style:italic;font-size:24px;opacity:.8">Contraste</p>
+    </div>`;
+  });
+
+  return `<div style="background:#f5f0eb;padding:32px 24px;font-family:Arial,sans-serif;max-width:600px;margin:0 auto">
+    <p style="font-size:15px;color:#333;margin:0 0 12px">Gentilissim${gen} ${nomeCliente},</p>
+    <p style="font-size:15px;color:#333;line-height:1.7;margin:0 0 12px">Grazie di aver scelto <strong>Contraste</strong>, ci auguriamo che il tempo con noi sia stato piacevole e che avremo modo di accogliervi nuovamente.</p>
+    <p style="font-size:15px;color:#333;line-height:1.7;margin:0 0 24px">Cogliamo questa occasione per condividervi l'esperienza vissuta più nel dettaglio.</p>
+    <p style="font-size:15px;color:#333;margin:0 0 4px">A presto!</p>
+    <p style="font-size:13px;color:#888;margin:0 0 32px;font-style:italic">Ristorante Contraste<br>Via Giuseppe Meda, 2 — 20136 Milano</p>
+    ${menuBlocks}
+  </div>`;
+}
+
+async function inviaMenuEmail(){
+  const table=getTables().find(t=>t.id===state.comandaTableId);
+  if(!table){showToast('⚠️ Tavolo non trovato');return;}
+  if(!table.email){showToast('⚠️ Inserisci prima l\'email del cliente nel tavolo');return;}
+  if(!table.comanda?.rows?.length){showToast('⚠️ Nessuna comanda generata');return;}
+
+  const btn=document.getElementById('btnInviaMenu');
+  btn.textContent='⏳ Invio...';
+  btn.disabled=true;
+
+  try{
+    const variants=buildMenuVariants(table);
+    if(!variants.length){showToast('⚠️ Nessun piatto in comanda');btn.textContent='✉️ Invia menu';btn.disabled=false;return;}
+
+    const dataIT=new Date(table.data||state.selectedDate).toLocaleDateString('it-IT',{day:'numeric',month:'long',year:'numeric'});
+    const htmlBody=buildMenuEmailHtml(table,variants,dataIT);
+    const nomeCliente=`${table.nome||''} ${table.cognome||''}`.trim();
+
+    // Send via Claude API with Gmail MCP
+    const resp=await fetch('https://api.anthropic.com/v1/messages',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({
+        model:'claude-sonnet-4-20250514',
+        max_tokens:300,
+        messages:[{role:'user',content:`Invia questa email tramite Gmail:
+- A: ${table.email}
+- Oggetto: Menu degustazione — Ristorante Contraste
+- Il corpo è HTML. Usalo esattamente così.
+
+${htmlBody}
+
+Invia l'email e rispondi solo "OK".`}],
+        mcp_servers:[{type:'url',url:'https://gmail.mcp.claude.com/mcp',name:'gmail'}]
+      })
+    });
+
+    const data=await resp.json();
+    const ok=data.content?.some(b=>b.type==='text')||data.content?.some(b=>b.type==='mcp_tool_result');
+
+    if(ok){
+      showToast(`✅ Menu inviato a ${table.email}`);
+      btn.textContent='✅ Inviato';
+      setTimeout(()=>{btn.textContent='✉️ Invia menu';btn.disabled=false;},4000);
+    } else {
+      throw new Error('Risposta API non valida');
+    }
+  }catch(e){
+    console.error(e);
+    showToast('⚠️ Errore invio: '+e.message);
+    btn.textContent='✉️ Invia menu';
+    btn.disabled=false;
+  }
+}
+
 function openRiepilogo(){
   const tables=getTables().slice().sort((a,b)=>(a.orario||'').localeCompare(b.orario||''));
   const sub=(state.service==='cena'?'Cena':'Pranzo')+' — '+formatDateIT(state.selectedDate);
