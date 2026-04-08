@@ -1473,6 +1473,80 @@ function closeComanda(){
   state.comandaTableId=null;
 }
 
+// ─── Apprendimento dalla comanda ──────────────────────────
+// Chiamata quando si esce dalla modalità modifica (salvataggio comanda)
+// Confronta comanda AI originale con quella finale dell'utente
+function learnFromComanda(table){
+  if(!table?.comanda||!table?.aiAnalysis) return;
+  if(!state._storicoPatterns) state._storicoPatterns=[];
+
+  const today = new Date().toISOString().slice(0,10);
+  const ai = table.aiAnalysis;
+  let changed = false;
+
+  // Per ogni riga della comanda con variante
+  table.comanda.rows.forEach(row=>{
+    // Colonne varianti (ci > 0) che hanno un label
+    row.cols.forEach((col,ci)=>{
+      if(ci===0||!col.label) return;
+
+      // Trova il reason AI originale per questa riga
+      const reasons = col.reasons||[];
+      reasons.forEach(reason=>{
+        if(!reason.restrizione) return;
+        const piatto = row.nome.toUpperCase().trim();
+        const restrizione = reason.restrizione;
+        const aiScelta = reason.sostituto||reason.nota||col.label; // cosa aveva scelto l'AI
+        const utenteScelta = col.label.trim(); // cosa c'è ora nella comanda (dopo eventuali modifiche)
+
+        // Cerca pattern esistente
+        const idx = state._storicoPatterns.findIndex(p=>
+          (p.piatto_titolare||p.piatto||'').toUpperCase().trim()===piatto &&
+          (p.restrizione||'').trim()===restrizione &&
+          (p.alternativa||'').trim().toUpperCase()===utenteScelta.toUpperCase()
+        );
+
+        const isModified = aiScelta.toUpperCase().trim() !== utenteScelta.toUpperCase();
+
+        if(idx>=0){
+          // Pattern già esiste — aggiorna contatori
+          const p = state._storicoPatterns[idx];
+          if(isModified){
+            p.corretto=(p.corretto||0)+1;
+            if(!p.correzioni) p.correzioni=[];
+            p.correzioni.push({ai_scelta:aiScelta, utente_scelta:utenteScelta, data:today});
+          } else {
+            p.conforme=(p.conforme||0)+1;
+          }
+          p.frequenza=(p.frequenza||1)+1;
+          p.totale_occorrenze=(p.totale_occorrenze||1)+1;
+          changed=true;
+        } else {
+          // Nuovo pattern dalla comanda
+          const newPat = {
+            piatto_titolare: piatto,
+            restrizione: restrizione,
+            alternativa: utenteScelta,
+            data: today,
+            source: 'comanda',
+            frequenza: 1,
+            totale_occorrenze: 1,
+            conforme: isModified?0:1,
+            corretto: isModified?1:0,
+            correzioni: isModified?[{ai_scelta:aiScelta, utente_scelta:utenteScelta, data:today}]:[]
+          };
+          state._storicoPatterns.push(newPat);
+          changed=true;
+        }
+      });
+    });
+  });
+
+  if(changed){
+    fbSaveStorico();
+  }
+}
+
 function stampaComanda(){
   const table=getTables().find(t=>t.id===state.comandaTableId);
   if(!table?.comanda)return;
@@ -1597,6 +1671,8 @@ document.getElementById('btnToggleEditComanda').addEventListener('click',()=>{
     if(table){
       table.comanda.nota=document.getElementById('comandaNotaInput').value.trim();
       setTables(getTables());
+      // Apprendi dalla comanda salvata
+      learnFromComanda(table);
       showToast('💾 Comanda salvata');
     }
   }
@@ -2381,8 +2457,25 @@ function normPattern(p){
     piatto_titolare: (p.piatto_titolare||p.piatto||'').trim(),
     restrizione: (p.restrizione||'').trim(),
     alternativa: (p.alternativa||'').trim(),
-    data: p.data||''
+    data: p.data||'',
+    source: p.source||'storico',
+    frequenza: p.frequenza||1,
+    totale_occorrenze: p.totale_occorrenze||1,
+    conforme: p.conforme||0,        // volte che l'AI ha scelto questo e l'utente non ha modificato
+    corretto: p.corretto||0,        // volte che l'utente ha cambiato la scelta AI
+    correzioni: p.correzioni||[]    // [{ai_scelta, utente_scelta, data}]
   };
+}
+
+// ─── Salva storico su Firestore ───────────────────────────
+async function fbSaveStorico(){
+  try{
+    await db.collection('config').doc('storico').set({
+      patterns: state._storicoPatterns||[],
+      serate: state._storicoSerate||[],
+      aggiornato: new Date().toISOString()
+    },{merge:true});
+  }catch(e){console.error('fbSaveStorico error',e);}
 }
 
 // State for storico search/pagination
@@ -2403,7 +2496,7 @@ function renderStoricoPage(){
   c.innerHTML=`
     <div style="max-width:860px">
       <!-- Stats -->
-      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:24px">
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:24px">
         <div class="stat-card">
           <div class="stat-label">Pattern totali</div>
           <div class="stat-value accent" id="statPatterns">${patternCount}</div>
@@ -2415,11 +2508,104 @@ function renderStoricoPage(){
           <div class="stat-sub">piatti titolari distinti</div>
         </div>
         <div class="stat-card">
-          <div class="stat-label">File importati</div>
-          <div class="stat-value">${sierateCount}</div>
-          <div class="stat-sub">file Excel caricati</div>
+          <div class="stat-label">Da comande</div>
+          <div class="stat-value">${(state._storicoPatterns||[]).filter(p=>p.source==='comanda').length}</div>
+          <div class="stat-sub">appresi automaticamente</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Manuali</div>
+          <div class="stat-value">${(state._storicoPatterns||[]).filter(p=>p.source==='manuale').length}</div>
+          <div class="stat-sub">inseriti dall'utente</div>
         </div>
       </div>
+
+      <!-- Aggiungi pattern manuale -->
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:20px;box-shadow:var(--shadow-sm);margin-bottom:20px">
+        <div style="font-size:14px;font-weight:500;margin-bottom:4px">✦ Aggiungi pattern manuale</div>
+        <div class="form-hint" style="margin-bottom:14px">Insegna all'AI una nuova associazione piatto → alternativa per una restrizione specifica.</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr auto;gap:10px;align-items:end">
+          <div>
+            <div style="font-size:11px;text-transform:uppercase;letter-spacing:.07em;color:var(--text-muted);margin-bottom:4px">Piatto titolare</div>
+            <input id="manualPiatto" type="text" placeholder="es. NOODLES" list="manualPiattoList"
+              style="width:100%;padding:8px 12px;border:1.5px solid var(--border);border-radius:var(--radius-sm);font-family:'DM Sans',sans-serif;font-size:13px;background:var(--bg);color:var(--text);outline:none"
+              onfocus="this.style.borderColor='var(--accent)'" onblur="this.style.borderColor='var(--border)'">
+            <datalist id="manualPiattoList">
+              ${[...new Set((state._storicoPatterns||[]).map(p=>(p.piatto_titolare||p.piatto||'').trim()).filter(Boolean))].sort().map(p=>`<option value="${esc(p)}">`).join('')}
+            </datalist>
+          </div>
+          <div>
+            <div style="font-size:11px;text-transform:uppercase;letter-spacing:.07em;color:var(--text-muted);margin-bottom:4px">Restrizione</div>
+            <select id="manualRestrizione"
+              style="width:100%;padding:8px 12px;border:1.5px solid var(--border);border-radius:var(--radius-sm);font-family:'DM Sans',sans-serif;font-size:13px;background:var(--bg);color:var(--text);outline:none"
+              onfocus="this.style.borderColor='var(--accent)'" onblur="this.style.borderColor='var(--border)'">
+              <option value="">— seleziona —</option>
+              ${['vegetariano','vegano','no glutine','no lattosio','no carne','no pesce','no molluschi','no crostacei','no uova','no interiora','no crudo','no funghi','no tartufo','no frutta secca','no formaggio','no maiale','no aglio','no lattosio','no piccante','no alcool'].map(r=>`<option value="${r}">${r}</option>`).join('')}
+            </select>
+          </div>
+          <div>
+            <div style="font-size:11px;text-transform:uppercase;letter-spacing:.07em;color:var(--text-muted);margin-bottom:4px">Alternativa</div>
+            <input id="manualAlternativa" type="text" placeholder="es. Carciofo"
+              style="width:100%;padding:8px 12px;border:1.5px solid var(--border);border-radius:var(--radius-sm);font-family:'DM Sans',sans-serif;font-size:13px;background:var(--bg);color:var(--text);outline:none"
+              onfocus="this.style.borderColor='var(--accent)'" onblur="this.style.borderColor='var(--border)'"
+              onkeydown="if(event.key==='Enter')aggiungiPatternManuale()">
+          </div>
+          <button class="btn btn-primary" onclick="aggiungiPatternManuale()" style="padding:8px 18px;white-space:nowrap">+ Aggiungi</button>
+        </div>
+        <div id="manualPatternMsg" style="margin-top:8px;font-size:12px;min-height:18px"></div>
+      </div>
+
+      <!-- Pattern appresi dalle comande -->
+      ${(state._storicoPatterns||[]).filter(p=>p.source==='comanda').length>0?`
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:20px;box-shadow:var(--shadow-sm);margin-bottom:20px">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+          <div>
+            <div style="font-size:14px;font-weight:500">🧠 Appresi dalle comande</div>
+            <div style="font-size:11px;color:var(--text-muted);margin-top:2px">${(state._storicoPatterns||[]).filter(p=>p.source==='comanda').length} pattern appresi automaticamente</div>
+          </div>
+        </div>
+        <table style="width:100%;border-collapse:collapse;font-size:12px">
+          <thead>
+            <tr style="border-bottom:2px solid var(--border)">
+              <th style="text-align:left;padding:6px 10px;font-size:10px;text-transform:uppercase;letter-spacing:.07em;color:var(--text-muted)">Piatto</th>
+              <th style="text-align:left;padding:6px 10px;font-size:10px;text-transform:uppercase;letter-spacing:.07em;color:var(--text-muted)">Restrizione</th>
+              <th style="text-align:left;padding:6px 10px;font-size:10px;text-transform:uppercase;letter-spacing:.07em;color:var(--text-muted)">Alternativa AI</th>
+              <th style="text-align:center;padding:6px 10px;font-size:10px;text-transform:uppercase;letter-spacing:.07em;color:var(--text-muted)">✓ Conf.</th>
+              <th style="text-align:center;padding:6px 10px;font-size:10px;text-transform:uppercase;letter-spacing:.07em;color:var(--text-muted)">✏️ Corr.</th>
+              <th style="text-align:left;padding:6px 10px;font-size:10px;text-transform:uppercase;letter-spacing:.07em;color:var(--text-muted)">Ultima correzione</th>
+              <th style="padding:6px 4px;width:28px"></th>
+            </tr>
+          </thead>
+          <tbody>
+            ${(state._storicoPatterns||[]).filter(p=>p.source==='comanda').map((p,i)=>{
+              const confRate = p.totale_occorrenze>0?Math.round((p.conforme||0)/p.totale_occorrenze*100):0;
+              const lastCorr = (p.correzioni||[]).slice(-1)[0];
+              const globalIdx = state._storicoPatterns.indexOf(p);
+              return `<tr style="border-bottom:1px solid var(--border);transition:background .1s" onmouseover="this.style.background='var(--surface2)'" onmouseout="this.style.background=''">
+                <td style="padding:8px 10px;font-weight:500">${esc(p.piatto_titolare||p.piatto||'')}</td>
+                <td style="padding:8px 10px;color:var(--text-secondary)">${esc(p.restrizione||'')}</td>
+                <td style="padding:8px 10px">
+                  <span style="background:var(--accent-light);color:var(--accent);padding:2px 8px;border-radius:20px;font-size:11px">${esc(p.alternativa||'')}</span>
+                </td>
+                <td style="padding:8px 10px;text-align:center">
+                  <span style="color:var(--accent);font-weight:500">${p.conforme||0}</span>
+                  ${p.totale_occorrenze>0?`<span style="color:var(--text-muted);font-size:10px"> (${confRate}%)</span>`:''}
+                </td>
+                <td style="padding:8px 10px;text-align:center">
+                  <span style="color:${(p.corretto||0)>0?'var(--danger)':'var(--text-muted)'};font-weight:${(p.corretto||0)>0?'600':'400'}">${p.corretto||0}</span>
+                </td>
+                <td style="padding:8px 10px;color:var(--text-muted);font-size:11px">
+                  ${lastCorr?`<span title="AI: ${esc(lastCorr.ai_scelta||'')} → Utente: ${esc(lastCorr.utente_scelta||'')}">✏️ ${esc(lastCorr.utente_scelta||'')} <span style="color:var(--text-muted)">(${lastCorr.data||''})</span></span>`:'—'}
+                </td>
+                <td style="padding:8px 4px;text-align:center">
+                  <button onclick="eliminaPattern(${globalIdx})" title="Elimina"
+                    style="background:none;border:none;cursor:pointer;color:var(--text-muted);font-size:14px;padding:2px 4px;border-radius:4px;transition:color .1s"
+                    onmouseover="this.style.color='var(--danger)'" onmouseout="this.style.color='var(--text-muted)'">✕</button>
+                </td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+        </table>
+      </div>`:''}
 
       <!-- Import area -->
       <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:20px;box-shadow:var(--shadow-sm);margin-bottom:20px">
@@ -2479,6 +2665,59 @@ function renderStoricoPage(){
   if(patternCount>0) renderStoricoTable();
 }
 
+async function aggiungiPatternManuale(){
+  const piatto = document.getElementById('manualPiatto').value.trim().toUpperCase();
+  const restrizione = document.getElementById('manualRestrizione').value.trim();
+  const alternativa = document.getElementById('manualAlternativa').value.trim();
+  const msg = document.getElementById('manualPatternMsg');
+
+  if(!piatto||!restrizione||!alternativa){
+    msg.style.color='var(--danger)';
+    msg.textContent='⚠ Compila tutti e tre i campi.';
+    return;
+  }
+
+  if(!state._storicoPatterns) state._storicoPatterns=[];
+
+  // Controlla duplicato
+  const dup = state._storicoPatterns.find(p=>
+    (p.piatto_titolare||p.piatto||'').toUpperCase().trim()===piatto &&
+    (p.restrizione||'').trim()===restrizione &&
+    (p.alternativa||'').trim().toUpperCase()===alternativa.toUpperCase()
+  );
+  if(dup){
+    msg.style.color='var(--orange)';
+    msg.textContent='⚠ Pattern già presente.';
+    return;
+  }
+
+  const newPat = {
+    piatto_titolare: piatto,
+    restrizione,
+    alternativa,
+    data: new Date().toISOString().slice(0,10),
+    source: 'manuale',
+    frequenza: 1,
+    totale_occorrenze: 1,
+    conforme: 0,
+    corretto: 0,
+    correzioni: []
+  };
+  state._storicoPatterns.push(newPat);
+
+  await fbSaveStorico();
+
+  // Reset form
+  document.getElementById('manualPiatto').value='';
+  document.getElementById('manualRestrizione').value='';
+  document.getElementById('manualAlternativa').value='';
+  msg.style.color='var(--accent)';
+  msg.textContent=`✓ Pattern aggiunto: ${piatto} | ${restrizione} → ${alternativa}`;
+  setTimeout(()=>{if(msg)msg.textContent='';},3000);
+
+  renderStoricoPage();
+}
+
 function storicoFilterRestrizione(r){
   _storicoSearch = (_storicoSearch===r)?'':r;
   _storicoPage=0;
@@ -2514,26 +2753,37 @@ function renderStoricoTable(){
       <table style="width:100%;border-collapse:collapse;font-size:12px">
         <thead>
           <tr style="background:var(--surface2);border-bottom:2px solid var(--border)">
-            <th style="text-align:left;padding:8px 10px;font-weight:500;color:var(--text-secondary);font-size:10px;text-transform:uppercase;letter-spacing:.08em;width:28%">Piatto titolare</th>
-            <th style="text-align:left;padding:8px 10px;font-weight:500;color:var(--text-secondary);font-size:10px;text-transform:uppercase;letter-spacing:.08em;width:25%">Restrizione</th>
+            <th style="text-align:left;padding:8px 10px;font-weight:500;color:var(--text-secondary);font-size:10px;text-transform:uppercase;letter-spacing:.08em;width:26%">Piatto titolare</th>
+            <th style="text-align:left;padding:8px 10px;font-weight:500;color:var(--text-secondary);font-size:10px;text-transform:uppercase;letter-spacing:.08em;width:23%">Restrizione</th>
             <th style="text-align:left;padding:8px 10px;font-weight:500;color:var(--text-secondary);font-size:10px;text-transform:uppercase;letter-spacing:.08em">Alternativa storica</th>
+            <th style="text-align:left;padding:8px 10px;font-weight:500;color:var(--text-secondary);font-size:10px;text-transform:uppercase;letter-spacing:.08em;width:80px">Fonte</th>
             <th style="width:36px"></th>
           </tr>
         </thead>
         <tbody>
-          ${slice.map((p,i)=>`
+          ${slice.map((p,i)=>{
+            const rawP = (state._storicoPatterns||[])[_storicoPage*_storicoPAGE_SIZE+i] || p;
+            const src = rawP.source||'storico';
+            const srcBadge = src==='manuale'
+              ? `<span style="background:#eef1f8;color:var(--blue);padding:2px 7px;border-radius:10px;font-size:10px">✦ manuale</span>`
+              : src==='comanda'
+              ? `<span style="background:var(--accent-light);color:var(--accent);padding:2px 7px;border-radius:10px;font-size:10px">🧠 comanda</span>`
+              : `<span style="background:var(--surface2);color:var(--text-muted);padding:2px 7px;border-radius:10px;font-size:10px">📚 storico</span>`;
+            return `
             <tr style="border-bottom:1px solid var(--border);transition:background .1s" onmouseover="this.style.background='var(--surface2)'" onmouseout="this.style.background=''">
               <td style="padding:7px 10px;font-weight:500">${highlightMatch(p.piatto_titolare,q)}</td>
               <td style="padding:7px 10px">
                 <span style="background:var(--danger-light);color:var(--danger);padding:2px 8px;border-radius:10px;font-size:10px;white-space:nowrap">${highlightMatch(p.restrizione.replace(/_/g,' '),q)}</span>
               </td>
               <td style="padding:7px 10px;color:var(--accent);font-style:italic">${highlightMatch(p.alternativa,q)}</td>
+              <td style="padding:7px 10px">${srcBadge}</td>
               <td style="padding:7px 6px;text-align:center">
                 <button onclick="eliminaPattern(${_storicoPage*_storicoPAGE_SIZE+i})" title="Elimina pattern"
                   style="background:none;border:none;cursor:pointer;color:var(--text-muted);font-size:14px;padding:2px 4px;border-radius:4px;line-height:1"
                   onmouseover="this.style.color='var(--danger)'" onmouseout="this.style.color='var(--text-muted)'">✕</button>
               </td>
-            </tr>`).join('')}
+            </tr>`;
+          }).join('')}
         </tbody>
       </table>
     </div>
@@ -2794,12 +3044,28 @@ Rispondi SOLO JSON:
 // Build RAG context for AI prompt from stored patterns
 function buildRAGContext(){
   if(!state._storicoPatterns?.length) return '';
-  const patterns = state._storicoPatterns.slice(0, 60).map(normPattern);
+
+  // Ordina per rilevanza: prima i pattern da comande reali con alta frequenza, poi manuali, poi storico
+  const sorted = [...state._storicoPatterns].sort((a,b)=>{
+    const scoreA = (a.frequenza||1) + (a.conforme||0)*0.5 - (a.corretto||0)*0.3;
+    const scoreB = (b.frequenza||1) + (b.conforme||0)*0.5 - (b.corretto||0)*0.3;
+    return scoreB - scoreA;
+  });
+
+  const patterns = sorted.slice(0, 80);
   let ctx = '\n\nPATTERN STORICI PER SUGGERIMENTI (solo per "suggerimento_storico" quando nessuna soluzione nel menu attuale):\n';
   ctx += 'Questi sono piatti usati in passato come sostituti. VERIFICA sempre che esistano nel menu secondario attuale prima di usarli come sostituto. Se non esistono, mettili solo in suggerimento_storico.\n';
-  ctx += patterns.map(p =>
-    `- ${p.piatto_titolare} | ${p.restrizione.replace(/_/g,' ')} → in passato: ${p.alternativa}`
-  ).join('\n');
+  ctx += 'Il numero tra parentesi indica le volte che questo pattern è stato usato e confermato. Un pattern con correzioni significa che l\'utente ha preferito una scelta diversa da quella AI.\n';
+  ctx += patterns.map(p => {
+    const freq = p.frequenza||1;
+    const conf = p.conforme||0;
+    const corr = p.corretto||0;
+    const lastCorr = (p.correzioni||[]).slice(-1)[0];
+    let line = `- ${(p.piatto_titolare||p.piatto||'').trim()} | ${(p.restrizione||'').replace(/_/g,' ')} → in passato: ${(p.alternativa||'').trim()}`;
+    if(freq>1||conf>0) line += ` (usato ${freq}x, confermato ${conf}x)`;
+    if(corr>0&&lastCorr) line += ` [corretto ${corr}x → utente preferisce: ${lastCorr.utente_scelta}]`;
+    return line;
+  }).join('\n');
   return ctx;
 }
 // ═══════════════════════════════════════════════════════
