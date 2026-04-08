@@ -2375,24 +2375,48 @@ function showToast(msg,dur=2800){
 // ═══════════════════════════════════════════════════════
 // STORICO AI — importa comande storiche per RAG
 // ═══════════════════════════════════════════════════════
+// Normalize pattern field: some older records use 'piatto' instead of 'piatto_titolare'
+function normPattern(p){
+  return {
+    piatto_titolare: (p.piatto_titolare||p.piatto||'').trim(),
+    restrizione: (p.restrizione||'').trim(),
+    alternativa: (p.alternativa||'').trim(),
+    data: p.data||''
+  };
+}
+
+// State for storico search/pagination
+let _storicoSearch='';
+let _storicoPage=0;
+const _storicoPAGE_SIZE=50;
+
 function renderStoricoPage(){
   const c=document.getElementById('storicoContent');
-  // Count stored patterns from Firestore
-  const patternCount=state._storicoPatterns?.length||0;
+  const allPatterns=(state._storicoPatterns||[]).map(normPattern);
+  const patternCount=allPatterns.length;
   const sierateCount=state._storicoSerate?.length||0;
 
+  // Unique piatti for filter suggestions
+  const uniquePiatti=[...new Set(allPatterns.map(p=>p.piatto_titolare).filter(Boolean))].sort();
+  const uniqueRestrizioni=[...new Set(allPatterns.map(p=>p.restrizione).filter(Boolean))].sort();
+
   c.innerHTML=`
-    <div style="max-width:700px">
+    <div style="max-width:860px">
       <!-- Stats -->
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:24px">
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:24px">
         <div class="stat-card">
-          <div class="stat-label">Pattern sostituzione</div>
+          <div class="stat-label">Pattern totali</div>
           <div class="stat-value accent" id="statPatterns">${patternCount}</div>
           <div class="stat-sub">piatto + restrizione → alternativa</div>
         </div>
         <div class="stat-card">
-          <div class="stat-label">Serate importate</div>
-          <div class="stat-value" id="statSerate">${sierateCount}</div>
+          <div class="stat-label">Piatti coperti</div>
+          <div class="stat-value">${uniquePiatti.length}</div>
+          <div class="stat-sub">piatti titolari distinti</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">File importati</div>
+          <div class="stat-value">${sierateCount}</div>
           <div class="stat-sub">file Excel caricati</div>
         </div>
       </div>
@@ -2426,23 +2450,135 @@ function renderStoricoPage(){
         </div>
       </div>
 
-      <!-- Pattern list preview -->
+      <!-- Search + Pattern table -->
       ${patternCount>0?`
       <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:20px;box-shadow:var(--shadow-sm)">
-        <div style="font-size:13px;font-weight:500;margin-bottom:12px">Esempi di pattern appresi</div>
-        <div style="font-size:11px;color:var(--text-muted);margin-bottom:10px">L'AI usa questi pattern quando analizza le restrizioni dei clienti</div>
-        <div style="display:flex;flex-direction:column;gap:5px;max-height:300px;overflow-y:auto">
-          ${(state._storicoPatterns||[]).slice(0,30).map(p=>`
-            <div style="display:flex;gap:8px;align-items:center;padding:6px 10px;background:var(--bg);border-radius:var(--radius-sm);font-size:12px">
-              <span style="font-weight:500;min-width:100px">${esc(p.piatto_titolare)}</span>
-              <span style="color:var(--danger);background:var(--danger-light);padding:1px 8px;border-radius:10px;font-size:10px;flex-shrink:0">${esc(p.restrizione.replace(/_/g,' '))}</span>
-              <span style="color:var(--text-muted)">→</span>
-              <span style="color:var(--accent);font-style:italic">${esc(p.alternativa)}</span>
-            </div>`).join('')}
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;gap:12px;flex-wrap:wrap">
+          <div style="font-size:13px;font-weight:500">📋 Pattern appresi</div>
+          <div style="display:flex;gap:8px;flex:1;max-width:480px">
+            <input id="storicoSearchInput" type="text" placeholder="Cerca piatto, restrizione o alternativa…"
+              value="${esc(_storicoSearch)}"
+              oninput="_storicoSearch=this.value;_storicoPage=0;renderStoricoTable()"
+              style="flex:1;padding:7px 12px;border:1.5px solid var(--border);border-radius:var(--radius-sm);font-family:'DM Sans',sans-serif;font-size:12px;background:var(--bg);color:var(--text);outline:none"
+              onfocus="this.style.borderColor='var(--accent)'" onblur="this.style.borderColor='var(--border)'">
+            ${_storicoSearch?`<button class="btn btn-ghost btn-sm" onclick="_storicoSearch='';_storicoPage=0;document.getElementById('storicoSearchInput').value='';renderStoricoTable()">✕</button>`:''}
+          </div>
         </div>
-        ${patternCount>30?`<div style="font-size:11px;color:var(--text-muted);margin-top:8px">... e altri ${patternCount-30} pattern</div>`:''}
-      </div>`:''}
+        <!-- Filter chips per restrizione -->
+        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px" id="storicoFilterChips">
+          ${uniqueRestrizioni.map(r=>`
+            <button onclick="storicoFilterRestrizione('${r}')" 
+              style="padding:3px 10px;border-radius:20px;border:1.5px solid var(--border);background:${_storicoSearch===r?'var(--danger)':'transparent'};color:${_storicoSearch===r?'#fff':'var(--text-secondary)'};font-family:'DM Sans',sans-serif;font-size:11px;cursor:pointer;transition:all .12s"
+              onmouseover="if('${r}'!==_storicoSearch)this.style.borderColor='var(--danger)'" 
+              onmouseout="if('${r}'!==_storicoSearch)this.style.borderColor='var(--border)'">${r}</button>`).join('')}
+        </div>
+        <div id="storicoTableContainer"></div>
+      </div>`:'<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:40px;text-align:center;color:var(--text-muted)">Nessun pattern ancora caricato. Importa file Excel o usa i file <code>carica_storico_*.html</code>.</div>'}
     </div>`;
+
+  if(patternCount>0) renderStoricoTable();
+}
+
+function storicoFilterRestrizione(r){
+  _storicoSearch = (_storicoSearch===r)?'':r;
+  _storicoPage=0;
+  renderStoricoPage();
+}
+
+function renderStoricoTable(){
+  const container=document.getElementById('storicoTableContainer');
+  if(!container)return;
+  const allPatterns=(state._storicoPatterns||[]).map(normPattern);
+  const q=_storicoSearch.toLowerCase().trim();
+  const filtered=q
+    ? allPatterns.filter(p=>
+        p.piatto_titolare.toLowerCase().includes(q)||
+        p.restrizione.toLowerCase().includes(q)||
+        p.alternativa.toLowerCase().includes(q))
+    : allPatterns;
+
+  const total=filtered.length;
+  const pages=Math.ceil(total/_storicoPAGE_SIZE);
+  const slice=filtered.slice(_storicoPage*_storicoPAGE_SIZE, (_storicoPage+1)*_storicoPAGE_SIZE);
+
+  if(!total){
+    container.innerHTML=`<div style="text-align:center;padding:20px;color:var(--text-muted);font-size:13px">Nessun pattern trovato per "<strong>${esc(_storicoSearch)}</strong>"</div>`;
+    return;
+  }
+
+  container.innerHTML=`
+    <div style="font-size:11px;color:var(--text-muted);margin-bottom:8px">
+      ${total} pattern${q?` su ${(state._storicoPatterns||[]).length} totali`:''} · pagina ${_storicoPage+1}/${pages||1}
+    </div>
+    <div style="overflow-x:auto">
+      <table style="width:100%;border-collapse:collapse;font-size:12px">
+        <thead>
+          <tr style="background:var(--surface2);border-bottom:2px solid var(--border)">
+            <th style="text-align:left;padding:8px 10px;font-weight:500;color:var(--text-secondary);font-size:10px;text-transform:uppercase;letter-spacing:.08em;width:28%">Piatto titolare</th>
+            <th style="text-align:left;padding:8px 10px;font-weight:500;color:var(--text-secondary);font-size:10px;text-transform:uppercase;letter-spacing:.08em;width:25%">Restrizione</th>
+            <th style="text-align:left;padding:8px 10px;font-weight:500;color:var(--text-secondary);font-size:10px;text-transform:uppercase;letter-spacing:.08em">Alternativa storica</th>
+            <th style="width:36px"></th>
+          </tr>
+        </thead>
+        <tbody>
+          ${slice.map((p,i)=>`
+            <tr style="border-bottom:1px solid var(--border);transition:background .1s" onmouseover="this.style.background='var(--surface2)'" onmouseout="this.style.background=''">
+              <td style="padding:7px 10px;font-weight:500">${highlightMatch(p.piatto_titolare,q)}</td>
+              <td style="padding:7px 10px">
+                <span style="background:var(--danger-light);color:var(--danger);padding:2px 8px;border-radius:10px;font-size:10px;white-space:nowrap">${highlightMatch(p.restrizione.replace(/_/g,' '),q)}</span>
+              </td>
+              <td style="padding:7px 10px;color:var(--accent);font-style:italic">${highlightMatch(p.alternativa,q)}</td>
+              <td style="padding:7px 6px;text-align:center">
+                <button onclick="eliminaPattern(${_storicoPage*_storicoPAGE_SIZE+i})" title="Elimina pattern"
+                  style="background:none;border:none;cursor:pointer;color:var(--text-muted);font-size:14px;padding:2px 4px;border-radius:4px;line-height:1"
+                  onmouseover="this.style.color='var(--danger)'" onmouseout="this.style.color='var(--text-muted)'">✕</button>
+              </td>
+            </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>
+    ${pages>1?`
+    <div style="display:flex;align-items:center;justify-content:center;gap:8px;margin-top:14px">
+      <button class="btn btn-ghost btn-sm" onclick="_storicoPage=Math.max(0,_storicoPage-1);renderStoricoTable()" ${_storicoPage===0?'disabled':''}>← Prec</button>
+      <span style="font-size:12px;color:var(--text-muted)">${_storicoPage+1} / ${pages}</span>
+      <button class="btn btn-ghost btn-sm" onclick="_storicoPage=Math.min(${pages-1},_storicoPage+1);renderStoricoTable()" ${_storicoPage>=pages-1?'disabled':''}>Succ →</button>
+    </div>`:''}
+  `;
+}
+
+function highlightMatch(text,q){
+  if(!q||!text)return esc(text||'');
+  const idx=text.toLowerCase().indexOf(q.toLowerCase());
+  if(idx<0)return esc(text);
+  return esc(text.slice(0,idx))+'<mark style="background:#fff3a3;border-radius:2px;padding:0 1px">'+esc(text.slice(idx,idx+q.length))+'</mark>'+esc(text.slice(idx+q.length));
+}
+
+async function eliminaPattern(globalIndex){
+  if(!confirm('Eliminare questo pattern?'))return;
+  const allPatterns=(state._storicoPatterns||[]).map(normPattern);
+  const q=_storicoSearch.toLowerCase().trim();
+  const filtered=q
+    ? allPatterns.filter(p=>p.piatto_titolare.toLowerCase().includes(q)||p.restrizione.toLowerCase().includes(q)||p.alternativa.toLowerCase().includes(q))
+    : allPatterns;
+  const toRemove=filtered[globalIndex];
+  if(!toRemove)return;
+  // Remove from state (match on all 3 fields)
+  state._storicoPatterns=(state._storicoPatterns||[]).filter(p=>{
+    const np=normPattern(p);
+    return !(np.piatto_titolare===toRemove.piatto_titolare&&np.restrizione===toRemove.restrizione&&np.alternativa===toRemove.alternativa);
+  });
+  // Save to Firestore
+  try{
+    await db.collection('config').doc('storico').set({
+      patterns:state._storicoPatterns,
+      serate:state._storicoSerate||[],
+      aggiornato:new Date().toISOString()
+    });
+    showToast('Pattern eliminato');
+  }catch(e){showToast('Errore salvataggio','error');}
+  renderStoricoTable();
+  // Update stats
+  document.getElementById('statPatterns').textContent=state._storicoPatterns.length;
 }
 
 // Recursively extract all .xlsx files from dropped items (supports folders)
@@ -2658,11 +2794,11 @@ Rispondi SOLO JSON:
 // Build RAG context for AI prompt from stored patterns
 function buildRAGContext(){
   if(!state._storicoPatterns?.length) return '';
-  const patterns = state._storicoPatterns.slice(0, 60);
+  const patterns = state._storicoPatterns.slice(0, 60).map(normPattern);
   let ctx = '\n\nPATTERN STORICI PER SUGGERIMENTI (solo per "suggerimento_storico" quando nessuna soluzione nel menu attuale):\n';
   ctx += 'Questi sono piatti usati in passato come sostituti. VERIFICA sempre che esistano nel menu secondario attuale prima di usarli come sostituto. Se non esistono, mettili solo in suggerimento_storico.\n';
   ctx += patterns.map(p =>
-    `- ${p.piatto_titolare.trim()} | ${p.restrizione.replace(/_/g,' ')} → in passato: ${p.alternativa}`
+    `- ${p.piatto_titolare} | ${p.restrizione.replace(/_/g,' ')} → in passato: ${p.alternativa}`
   ).join('\n');
   return ctx;
 }
