@@ -3329,6 +3329,8 @@ function showBanner(msg, type='warn'){
 
 document.getElementById('btnConfermaSerata').addEventListener('click',confermaSerata);
 document.getElementById('btnScaricaPdf').addEventListener('click',scaricaPdfMenu);
+
+async function inviaMenuEmail(){
   const table=getTables().find(t=>t.id===state.comandaTableId);
   if(!table){showToast('⚠️ Tavolo non trovato');return;}
   if(!table.email){showToast('⚠️ Inserisci prima l\'email del cliente nel tavolo');return;}
@@ -3342,11 +3344,15 @@ document.getElementById('btnScaricaPdf').addEventListener('click',scaricaPdfMenu
     const variants=buildMenuVariants(table);
     if(!variants.length){showToast('⚠️ Nessun piatto in comanda');btn.textContent='✉️ Invia menu';btn.disabled=false;return;}
 
-    const dataIT=new Date(table.data||state.selectedDate).toLocaleDateString('it-IT',{day:'numeric',month:'long',year:'numeric'});
-    const htmlBody=buildMenuEmailHtml(table,variants,dataIT);
-    const nomeCliente=`${table.nome||''} ${table.cognome||''}`.trim();
+    const straniero=table.straniero||false;
+    const dataStr=new Date(table.data||state.selectedDate).toLocaleDateString(
+      straniero?'en-GB':'it-IT',{day:'numeric',month:'long',year:'numeric'}
+    );
+    const htmlBody=buildMenuEmailHtml(table,variants,dataStr);
+    const oggetto=straniero
+      ?'Your tasting menu — Ristorante Contraste'
+      :'Menu degustazione — Ristorante Contraste';
 
-    // Send via Claude API with Gmail MCP
     const resp=await fetch('https://api.anthropic.com/v1/messages',{
       method:'POST',
       headers:{'Content-Type':'application/json'},
@@ -3355,7 +3361,7 @@ document.getElementById('btnScaricaPdf').addEventListener('click',scaricaPdfMenu
         max_tokens:300,
         messages:[{role:'user',content:`Invia questa email tramite Gmail:
 - A: ${table.email}
-- Oggetto: Menu degustazione — Ristorante Contraste
+- Oggetto: ${oggetto}
 - Il corpo è HTML. Usalo esattamente così.
 
 ${htmlBody}
