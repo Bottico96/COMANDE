@@ -420,7 +420,13 @@ header{height:var(--header-h);background:var(--surface);border-bottom:1px solid 
   #printArea{display:block!important;position:fixed;inset:0;background:#fff}
   @page{size:A4 landscape;margin:8mm}
 }
+@media print and (orientation: portrait){
+  body>*:not(#pdfMenuArea){display:none!important}
+  #pdfMenuArea{display:block!important}
+  @page{size:A4 portrait;margin:0}
+}
 #printArea{display:none}
+#pdfMenuArea{display:none}
 .print-sheet{width:100%;height:100%;display:grid;grid-template-columns:1fr 1fr;gap:6mm;font-family:'DM Sans',sans-serif}
 .print-comanda{border:1.5px solid #888;padding:4mm;font-size:8pt;background:#fffff8;position:relative}
 .pc-header{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:3mm;border-bottom:1px solid #aaa;padding-bottom:2mm}
@@ -607,6 +613,14 @@ header{height:var(--header-h);background:var(--surface);border-bottom:1px solid 
         <label class="form-label">Note generali</label>
         <textarea class="form-textarea" id="tNoteGenerali" style="min-height:56px" placeholder="es. Compleanno lui, anniversario, tavolo vicino alla finestra…"></textarea>
       </div>
+      <!-- Flag straniero -->
+      <div class="form-group" style="display:flex;align-items:center;gap:10px">
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none">
+          <input type="checkbox" id="tStraniero" style="width:16px;height:16px;accent-color:var(--accent);cursor:pointer">
+          <span class="form-label" style="margin:0">🌍 Cliente straniero</span>
+        </label>
+        <span class="form-hint" style="margin:0">L'email verrà inviata in inglese</span>
+      </div>
       <!-- Restrizioni per ospite -->
       <div class="form-group">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
@@ -685,6 +699,8 @@ header{height:var(--header-h);background:var(--surface);border-bottom:1px solid 
     <button class="btn btn-ghost btn-sm" id="btnToggleEditComanda">✏️ Modifica</button>
     <button class="btn btn-ghost btn-sm" id="btnAddComandaCol">+ Colonna</button>
     <button class="btn btn-ghost btn-sm" id="btnInviaMenu">✉️ Invia menu</button>
+    <button class="btn btn-ghost btn-sm" id="btnScaricaPdf">⬇ PDF</button>
+    <button class="btn btn-success btn-sm" id="btnConfermaSerata" style="background:var(--accent);color:#fff;border-color:var(--accent)">✓ Conferma serata</button>
     <button class="btn btn-primary btn-sm" id="btnStampaComanda">🖨 Stampa</button>
   </div>
   <div class="comanda-body">
@@ -701,6 +717,9 @@ header{height:var(--header-h);background:var(--surface);border-bottom:1px solid 
 
 <!-- ══ PRINT AREA ══ -->
 <div id="printArea"></div>
+
+<!-- ══ PDF NEXT DAY MENU ══ -->
+<div id="pdfMenuArea" style="display:none"></div>
 
 <!-- ══ COMANDA REASON POPUP ══ -->
 <div class="comanda-reason-popup hidden" id="comandaReasonPopup">
@@ -932,10 +951,15 @@ function renderTablesGrid(){
   let html=tables.map((t,i)=>{
     const aiHtml=t.aiAlerts?.length
       ?`<div class="ai-alert-badge"><span class="ai-icon">✦</span><span>${t.aiAlerts.slice(0,2).map(a=>esc(a)).join(' · ')}</span></div>`:'';
-    return `<div class="table-card" style="animation-delay:${i*.035}s">
+    return `<div class="table-card" style="animation-delay:${i*.035}s${t.confermata?';border-color:#2d6a2d':''}">
       <div class="card-header">
-        <div><div class="card-table-number">Tavolo ${t.numeroTavolo||i+1}</div><div class="card-name">${esc(t.nome)} ${esc(t.cognome)}</div></div>
-        <div class="guest-badge">👤 ${t.ospiti} ${t.ospiti===1?'ospite':'ospiti'}</div>
+        <div><div class="card-table-number">Tavolo ${t.numeroTavolo||i+1}</div><div class="card-name">${esc(t.nome)} ${esc(t.cognome)}${t.straniero?' 🌍':''}</div></div>
+        <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px">
+          <div class="guest-badge">👤 ${t.ospiti} ${t.ospiti===1?'ospite':'ospiti'}</div>
+          ${t.confermata&&t.emailInviata?`<span style="font-size:10px;background:#2d6a2d;color:#fff;padding:2px 6px;border-radius:10px">✅ Inviata</span>`:''}
+          ${t.confermata&&!t.emailInviata?`<span style="font-size:10px;background:#a07010;color:#fff;padding:2px 6px;border-radius:10px">⏳ Email pendente</span>`:''}
+          ${!t.confermata&&t.comanda?.rows?.length&&t.email?`<span style="font-size:10px;background:var(--danger);color:#fff;padding:2px 6px;border-radius:10px">⚠ Non confermata</span>`:''}
+        </div>
       </div>
       <div class="card-body">
         <div class="card-row"><span class="icon">🕐</span> Arrivo: <strong>${t.orario||'—'}</strong></div>
@@ -982,6 +1006,9 @@ function openTableModal(id=null){
     }
   }
   Object.entries(fields).forEach(([k,v])=>{const el=document.getElementById(k);if(el)el.value=v||'';});
+  // Ripristina checkbox straniero
+  const stranieroEl=document.getElementById('tStraniero');
+  if(stranieroEl){const t=id?getTables().find(x=>x.id===id):null;stranieroEl.checked=t?.straniero||false;}
   document.getElementById('aiPanel').style.display='none';
   document.getElementById('btnAnalyze').style.display='none';
   const n=parseInt(fields.tOspiti)||0;
@@ -1207,6 +1234,7 @@ function saveTable(){
     telefono:document.getElementById('tTelefono').value.trim(),
     email:document.getElementById('tEmail').value.trim(),
     noteGenerali:document.getElementById('tNoteGenerali').value.trim(),
+    straniero:document.getElementById('tStraniero')?.checked||false,
     guests,
     menu:document.getElementById('tMenu').value||null,
     aiAlerts:state._pendingAIAlerts||null,
@@ -1318,6 +1346,26 @@ function renderComanda(table){
   // Update edit button
   const editBtn=document.getElementById('btnToggleEditComanda');
   if(editBtn){editBtn.textContent=state.comandaEditMode?'💾 Salva':'✏️ Modifica';editBtn.className=state.comandaEditMode?'btn btn-primary btn-sm':'btn btn-ghost btn-sm';}
+
+  // Update conferma button
+  const confermaBtn=document.getElementById('btnConfermaSerata');
+  if(confermaBtn){
+    if(table.confermata&&table.emailInviata){
+      confermaBtn.textContent='✅ Confermata';
+      confermaBtn.style.background='#2d6a2d';
+      confermaBtn.style.borderColor='#2d6a2d';
+      confermaBtn.disabled=true;
+    } else if(table.confermata){
+      confermaBtn.textContent='✓ Confermata (email pendente)';
+      confermaBtn.style.background='#a07010';
+      confermaBtn.disabled=false;
+    } else {
+      confermaBtn.textContent='✓ Conferma serata';
+      confermaBtn.style.background='var(--accent)';
+      confermaBtn.style.borderColor='var(--accent)';
+      confermaBtn.disabled=false;
+    }
+  }
 
   // Summary chips
   const mods=c.rows.filter(r=>r.status==='modified').length;
@@ -3069,34 +3117,218 @@ function buildMenuVariants(table){
   return variants;
 }
 
-function buildMenuEmailHtml(table, variants, dataIT){
-  const nomeCliente=`${table.nome||''} ${table.cognome||''}`.trim();
-  const gen=table.nome?.endsWith('a')?'a':'o';
+function buildMenuEmailHtml(table, variants, dataStr){
+  const nomeCliente=(table.nome||'').trim();
+  const straniero=table.straniero||false;
+  const gen=nomeCliente.endsWith('a')?'a':'o';
+
+  const intro=straniero
+    ? `<p style="font-size:15px;color:#333;margin:0 0 12px">Dear ${nomeCliente},</p>
+       <p style="font-size:15px;color:#333;line-height:1.7;margin:0 0 12px">Thank you for choosing <strong>Contraste</strong>. We hope your time with us was enjoyable and that we will have the pleasure of welcoming you again.</p>
+       <p style="font-size:15px;color:#333;line-height:1.7;margin:0 0 24px">We take this opportunity to share your experience in more detail.</p>
+       <p style="font-size:15px;color:#333;margin:0 0 4px">See you soon!</p>`
+    : `<p style="font-size:15px;color:#333;margin:0 0 12px">Gentilissim${gen} ${nomeCliente},</p>
+       <p style="font-size:15px;color:#333;line-height:1.7;margin:0 0 12px">Grazie di aver scelto <strong>Contraste</strong>, ci auguriamo che il tempo con noi sia stato piacevole e che avremo modo di accogliervi nuovamente.</p>
+       <p style="font-size:15px;color:#333;line-height:1.7;margin:0 0 24px">Cogliamo questa occasione per condividervi l'esperienza vissuta più nel dettaglio.</p>
+       <p style="font-size:15px;color:#333;margin:0 0 4px">A presto!</p>`;
 
   let menuBlocks='';
   variants.forEach(v=>{
-    const piattiHtml=v.piatti.map(p=>`<p style="margin:8px 0;font-size:15px;font-family:Georgia,serif">${esc(p)}</p>`).join('');
+    const piattiHtml=v.piatti.map(p=>`<p style="margin:8px 0;font-size:15px;font-family:Georgia,serif;color:#fff">${esc(p)}</p>`).join('');
     menuBlocks+=`<div style="background:#6B1A2A;color:#fff;padding:48px 40px;text-align:center;margin-bottom:16px">
-      <p style="font-size:9px;letter-spacing:3px;opacity:.65;margin:0 0 6px;font-family:Arial,sans-serif">POCO O NULLA CI IMPEDISCE DI RICORDARE, MOLTO O TUTTO DI DIMENTICARE</p>
-      <h1 style="font-family:Arial,sans-serif;font-size:52px;margin:0 0 10px;letter-spacing:1px;font-weight:900">NEXT DAY MENU</h1>
-      <p style="font-size:12px;opacity:.85;margin:0 0 28px;font-family:Arial,sans-serif;letter-spacing:1px">${dataIT.toUpperCase()}</p>
+      <p style="font-size:9px;letter-spacing:3px;opacity:.65;margin:0 0 6px;font-family:Arial,sans-serif;color:#fff">POCO O NULLA CI IMPEDISCE DI RICORDARE, MOLTO O TUTTO DI DIMENTICARE</p>
+      <h1 style="font-family:Arial,sans-serif;font-size:52px;margin:0 0 10px;letter-spacing:1px;font-weight:900;color:#fff">NEXT DAY MENU</h1>
+      <p style="font-size:12px;opacity:.85;margin:0 0 28px;font-family:Arial,sans-serif;letter-spacing:1px;color:#fff">${dataStr.toUpperCase()}</p>
       <div style="width:80px;height:1px;background:rgba(255,255,255,0.35);margin:0 auto 32px"></div>
       ${piattiHtml}
-      <p style="margin-top:44px;font-family:Georgia,serif;font-style:italic;font-size:24px;opacity:.8">Contraste</p>
+      <p style="margin-top:44px;font-family:Georgia,serif;font-style:italic;font-size:24px;opacity:.8;color:#fff">Contraste</p>
     </div>`;
   });
 
   return `<div style="background:#f5f0eb;padding:32px 24px;font-family:Arial,sans-serif;max-width:600px;margin:0 auto">
-    <p style="font-size:15px;color:#333;margin:0 0 12px">Gentilissim${gen} ${nomeCliente},</p>
-    <p style="font-size:15px;color:#333;line-height:1.7;margin:0 0 12px">Grazie di aver scelto <strong>Contraste</strong>, ci auguriamo che il tempo con noi sia stato piacevole e che avremo modo di accogliervi nuovamente.</p>
-    <p style="font-size:15px;color:#333;line-height:1.7;margin:0 0 24px">Cogliamo questa occasione per condividervi l'esperienza vissuta più nel dettaglio.</p>
-    <p style="font-size:15px;color:#333;margin:0 0 4px">A presto!</p>
+    ${intro}
     <p style="font-size:13px;color:#888;margin:0 0 32px;font-style:italic">Ristorante Contraste<br>Via Giuseppe Meda, 2 — 20136 Milano</p>
     ${menuBlocks}
   </div>`;
 }
 
-async function inviaMenuEmail(){
+// ─── Conferma serata + invio automatico email ─────────────
+async function confermaSerata(){
+  const table=getTables().find(t=>t.id===state.comandaTableId);
+  if(!table){showToast('⚠️ Tavolo non trovato');return;}
+  if(!table.comanda?.rows?.length){showToast('⚠️ Genera prima la comanda');return;}
+  if(!table.email){showToast('⚠️ Email cliente mancante nel tavolo');return;}
+
+  if(!confirm(`Confermare la serata per ${table.nome} ${table.cognome} e inviare il menu via email?`))return;
+
+  const btn=document.getElementById('btnConfermaSerata');
+  btn.disabled=true;btn.textContent='⏳ Invio...';
+
+  // Segna come confermata
+  const tables=getTables();
+  const idx=tables.findIndex(t=>t.id===state.comandaTableId);
+  if(idx>=0){
+    tables[idx].confermata=true;
+    tables[idx].confermaTimestamp=new Date().toISOString();
+    setTables(tables);
+  }
+
+  // Invia email
+  try{
+    const variants=buildMenuVariants(table);
+    if(!variants.length){showToast('⚠️ Nessun piatto in comanda');btn.disabled=false;btn.textContent='✓ Conferma serata';return;}
+    const straniero=table.straniero||false;
+    const dataStr=new Date(table.data||state.selectedDate).toLocaleDateString(
+      straniero?'en-GB':'it-IT',{day:'numeric',month:'long',year:'numeric'}
+    );
+    const htmlBody=buildMenuEmailHtml(table,variants,dataStr);
+    const oggetto=straniero
+      ?'Your tasting menu — Ristorante Contraste'
+      :'Menu degustazione — Ristorante Contraste';
+
+    const resp=await fetch('https://api.anthropic.com/v1/messages',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({
+        model:'claude-sonnet-4-20250514',
+        max_tokens:300,
+        messages:[{role:'user',content:`Invia questa email tramite Gmail:
+- A: ${table.email}
+- Oggetto: ${oggetto}
+- Corpo HTML (usalo esattamente):
+
+${htmlBody}
+
+Rispondi solo "OK".`}],
+        mcp_servers:[{type:'url',url:'https://gmail.mcp.claude.com/mcp',name:'gmail'}]
+      })
+    });
+    const data=await resp.json();
+    const ok=data.content?.some(b=>b.type==='text'||b.type==='mcp_tool_result');
+    if(ok){
+      // Salva emailInviata
+      const t2=getTables();
+      const i2=t2.findIndex(t=>t.id===state.comandaTableId);
+      if(i2>=0){t2[i2].emailInviata=true;t2[i2].emailTimestamp=new Date().toISOString();setTables(t2);}
+      btn.textContent='✅ Confermata';
+      btn.style.background='#2d6a2d';
+      showToast(`✅ Serata confermata — menu inviato a ${table.email}`);
+      renderComanda(table);
+    } else {
+      throw new Error('Risposta API non valida');
+    }
+  }catch(e){
+    console.error(e);
+    showToast('⚠️ Errore invio email: '+e.message);
+    btn.disabled=false;btn.textContent='✓ Conferma serata';
+  }
+}
+
+// ─── Scarica PDF Next Day Menu ────────────────────────────
+function scaricaPdfMenu(){
+  const table=getTables().find(t=>t.id===state.comandaTableId);
+  if(!table?.comanda?.rows?.length){showToast('⚠️ Nessuna comanda da scaricare');return;}
+
+  const variants=buildMenuVariants(table);
+  if(!variants.length){showToast('⚠️ Nessun piatto in comanda');return;}
+
+  const straniero=table.straniero||false;
+  const dataStr=new Date(table.data||state.selectedDate).toLocaleDateString(
+    straniero?'en-GB':'it-IT',{day:'numeric',month:'long',year:'numeric'}
+  );
+
+  // Genera pagine PDF — una per variante menu + eventuale pagina vini
+  const pages=variants.map(v=>{
+    const piatti=v.piatti.map(p=>`
+      <div style="margin:10px 0;font-size:15px;font-family:Georgia,serif;color:#fff;text-align:center">${p}</div>
+    `).join('');
+    return `
+    <div style="width:210mm;height:297mm;background:#6B1A2A;display:flex;flex-direction:column;
+                align-items:center;justify-content:space-between;padding:32mm 24mm 20mm;
+                box-sizing:border-box;page-break-after:always;position:relative">
+      <div style="text-align:center;width:100%">
+        <p style="font-size:8px;letter-spacing:3px;color:rgba(255,255,255,.65);margin:0 0 8px;font-family:Arial,sans-serif;text-transform:uppercase">
+          Poco o nulla ci impedisce di ricordare, molto o tutto di dimenticare
+        </p>
+        <h1 style="font-family:Arial,sans-serif;font-size:64px;margin:0 0 12px;letter-spacing:2px;font-weight:900;color:#fff;line-height:1">
+          NEXT DAY MENU
+        </h1>
+        <p style="font-size:11px;color:rgba(255,255,255,.85);margin:0 0 32px;font-family:Arial,sans-serif;letter-spacing:2px">
+          ${dataStr.toUpperCase()}
+        </p>
+        <div style="width:60px;height:1px;background:rgba(255,255,255,.3);margin:0 auto 28px"></div>
+        ${piatti}
+      </div>
+      <div style="text-align:center">
+        <p style="font-family:Georgia,serif;font-style:italic;font-size:22px;color:rgba(255,255,255,.8);margin:0">Contraste</p>
+      </div>
+    </div>`;
+  }).join('');
+
+  const pdfArea=document.getElementById('pdfMenuArea');
+  pdfArea.innerHTML=`<div style="font-family:Arial,sans-serif">${pages}</div>`;
+
+  // CSS print override per questa stampa
+  const styleId='pdfPrintStyle';
+  let style=document.getElementById(styleId);
+  if(!style){style=document.createElement('style');style.id=styleId;document.head.appendChild(style);}
+  style.textContent=`
+    @media print{
+      body>*{display:none!important}
+      #pdfMenuArea{display:block!important;margin:0;padding:0}
+      @page{size:A4 portrait;margin:0}
+    }
+  `;
+
+  setTimeout(()=>{
+    window.print();
+    setTimeout(()=>{style.textContent='';pdfArea.innerHTML='';},1000);
+  },100);
+}
+
+// ─── Alert comande non confermate dopo 24h ────────────────
+function checkComandeDaConfermare(){
+  const now=Date.now();
+  const soglia=24*60*60*1000; // 24 ore in ms
+  const allKeys=Object.keys(state.tables||{});
+  const nonConfermate=[];
+
+  allKeys.forEach(key=>{
+    (state.tables[key]||[]).forEach(t=>{
+      if(!t.comanda?.rows?.length) return; // nessuna comanda
+      if(t.confermata) return; // già confermata
+      if(!t.email) return; // niente email, non rilevante
+      // Controlla data servizio
+      const dataServizio=new Date((t.data||'')+'T23:59:00').getTime();
+      if(isNaN(dataServizio)) return;
+      if(now-dataServizio>soglia){
+        nonConfermate.push(t);
+      }
+    });
+  });
+
+  if(nonConfermate.length>0){
+    const nomi=nonConfermate.map(t=>`${t.nome} ${t.cognome} (${t.data||''})`).join(', ');
+    showBanner(`⚠️ ${nonConfermate.length} comanda${nonConfermate.length>1?'e':''} non confermata${nonConfermate.length>1?'e':''} — email non inviata: ${nomi}`,'warn');
+  }
+}
+
+function showBanner(msg, type='warn'){
+  const existing=document.getElementById('alertBanner');
+  if(existing)existing.remove();
+  const banner=document.createElement('div');
+  banner.id='alertBanner';
+  banner.style.cssText=`position:fixed;top:0;left:0;right:0;z-index:9999;
+    background:${type==='warn'?'#c9870a':'#2d6a2d'};color:#fff;
+    padding:10px 20px;font-size:13px;display:flex;align-items:center;
+    justify-content:space-between;font-family:'DM Sans',sans-serif;box-shadow:0 2px 8px rgba(0,0,0,.2)`;
+  banner.innerHTML=`<span>${msg}</span>
+    <button onclick="this.parentElement.remove()" style="background:none;border:none;color:#fff;cursor:pointer;font-size:18px;padding:0 4px">✕</button>`;
+  document.body.prepend(banner);
+}
+
+document.getElementById('btnConfermaSerata').addEventListener('click',confermaSerata);
+document.getElementById('btnScaricaPdf').addEventListener('click',scaricaPdfMenu);
   const table=getTables().find(t=>t.id===state.comandaTableId);
   if(!table){showToast('⚠️ Tavolo non trovato');return;}
   if(!table.email){showToast('⚠️ Inserisci prima l\'email del cliente nel tavolo');return;}
@@ -3471,6 +3703,8 @@ async function loadFromFirestore(){
   document.querySelector('.toast')?.remove();
   initDate();
   renderTavoliPage();
+  // Controlla comande non confermate dopo 24h
+  setTimeout(checkComandeDaConfermare, 1500);
 }
 
 function setupRealtimeListeners(){
