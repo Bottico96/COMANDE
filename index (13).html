@@ -711,6 +711,23 @@ header{height:var(--header-h);background:var(--surface);border-bottom:1px solid 
   <div id="crpBody"></div>
 </div>
 
+<!-- ══ POPUP MOTIVAZIONE CORREZIONI ══ -->
+<div class="modal-overlay hidden" id="motivazioneOverlay">
+  <div class="modal" style="max-width:560px">
+    <div class="modal-header">
+      <div>
+        <div class="modal-title">✏️ Motivazione modifiche</div>
+        <div class="modal-subtitle">Hai modificato la scelta dell'AI. Aggiungi una motivazione per migliorare l'apprendimento (opzionale).</div>
+      </div>
+    </div>
+    <div class="modal-body" id="motivazioneBody" style="display:flex;flex-direction:column;gap:14px;max-height:60vh;overflow-y:auto"></div>
+    <div class="modal-footer" style="justify-content:space-between">
+      <button class="btn btn-ghost" onclick="chiudiMotivazioneEApprendi(false)">Salta</button>
+      <button class="btn btn-primary" onclick="chiudiMotivazioneEApprendi(true)">💾 Salva e apprendi</button>
+    </div>
+  </div>
+</div>
+
 <!-- ══ MODAL RIEPILOGO SERATA ══ -->
 <div class="modal-overlay hidden" id="modalRiepilogo">
   <div class="modal" style="max-width:720px">
@@ -867,25 +884,26 @@ function initDate(){
 function renderServiceTabs(){
   const c=document.getElementById('serviceTabs');
   c.innerHTML=[{id:'cena',label:'Cena',icon:'🌙'},{id:'pranzo',label:'Pranzo',icon:'☀️'}].map(s=>{
-    const count=Object.entries(state.tables).filter(([k])=>k.startsWith(s.id)).reduce((n,[,a])=>n+a.length,0);
+    const count=(state.tables[`${s.id}-${state.selectedDate}`]||[]).length;
     return `<button class="service-tab ${state.service===s.id?'active':''}" data-svc="${s.id}">${s.icon} ${s.label} <span class="tab-count">${count}</span></button>`;
   }).join('');
   c.querySelectorAll('.service-tab').forEach(b=>b.addEventListener('click',()=>{state.service=b.dataset.svc;renderTavoliPage();}));
 }
 function renderDayPills(){
   const c=document.getElementById('dayPills');
-  const base=state.selectedDate||todayISO();
+  const today=todayISO();
   const pills=[];
-  for(let i=0;i<=6;i++){
-    const d=new Date(base+'T12:00:00');
+  for(let i=-3;i<=3;i++){
+    const d=new Date(today+'T12:00:00');
     d.setDate(d.getDate()+i);
     const iso=d.toISOString().slice(0,10);
-    const isToday=iso===todayISO();
+    const isToday=iso===today;
     const dayName=isToday?'Oggi':d.toLocaleDateString('it-IT',{weekday:'short'});
     const dateNum=d.toLocaleDateString('it-IT',{day:'2-digit',month:'short'});
-    pills.push({iso,dayName,dateNum});
+    pills.push({iso,dayName,dateNum,isToday});
   }
-  c.innerHTML=pills.map(p=>`<button class="day-pill ${p.iso===state.selectedDate?'active':''}" data-date="${p.iso}" style="display:flex;flex-direction:column;align-items:center;gap:1px;padding:5px 12px;line-height:1.3">
+  c.innerHTML=pills.map(p=>`<button class="day-pill ${p.iso===state.selectedDate?'active':''}" data-date="${p.iso}"
+    style="display:flex;flex-direction:column;align-items:center;gap:1px;padding:5px 12px;line-height:1.3${p.isToday&&p.iso!==state.selectedDate?';border-color:var(--accent);color:var(--accent)':''}">
     <span style="font-size:10px;text-transform:capitalize">${p.dayName}</span>
     <span style="font-size:12px;font-weight:500">${p.dateNum}</span>
   </button>`).join('');
@@ -900,7 +918,7 @@ function renderStats(){
   document.getElementById('statTavoli').textContent=t.length;
   document.getElementById('statCoperti').textContent=t.reduce((s,x)=>s+x.ospiti,0);
   document.getElementById('statLiberi').textContent=Math.max(0,14-t.length);
-  document.getElementById('statNote').textContent=t.filter(x=>x.note?.trim()).length;
+  document.getElementById('statNote').textContent=t.filter(x=>x.noteGenerali?.trim()).length;
 }
 function esc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
 
@@ -1473,48 +1491,139 @@ function closeComanda(){
   state.comandaTableId=null;
 }
 
-// ─── Apprendimento dalla comanda ──────────────────────────
-// Chiamata quando si esce dalla modalità modifica (salvataggio comanda)
-// Confronta comanda AI originale con quella finale dell'utente
-function learnFromComanda(table){
-  if(!table?.comanda||!table?.aiAnalysis) return;
-  if(!state._storicoPatterns) state._storicoPatterns=[];
-
-  const today = new Date().toISOString().slice(0,10);
-  const ai = table.aiAnalysis;
-  let changed = false;
-
-  // Per ogni riga della comanda con variante
+// ─── Rileva correzioni rispetto all'AI originale ─────────
+// Ritorna array di {piatto, restrizione, ai_scelta, utente_scelta}
+// per ogni riga dove l'utente ha cambiato rispetto all'AI
+function rilevaCorrezioni(table){
+  if(!table?.comanda||!table?.aiAnalysis) return [];
+  const correzioni=[];
   table.comanda.rows.forEach(row=>{
-    // Colonne varianti (ci > 0) che hanno un label
     row.cols.forEach((col,ci)=>{
       if(ci===0||!col.label) return;
-
-      // Trova il reason AI originale per questa riga
-      const reasons = col.reasons||[];
+      const reasons=col.reasons||[];
       reasons.forEach(reason=>{
         if(!reason.restrizione) return;
-        const piatto = row.nome.toUpperCase().trim();
-        const restrizione = reason.restrizione;
-        const aiScelta = reason.sostituto||reason.nota||col.label; // cosa aveva scelto l'AI
-        const utenteScelta = col.label.trim(); // cosa c'è ora nella comanda (dopo eventuali modifiche)
+        const aiScelta=(reason.sostituto||reason.nota||'').trim();
+        const utenteScelta=col.label.trim();
+        if(aiScelta && utenteScelta.toUpperCase()!==aiScelta.toUpperCase()){
+          correzioni.push({
+            piatto: row.nome.toUpperCase().trim(),
+            restrizione: reason.restrizione,
+            ai_scelta: aiScelta,
+            utente_scelta: utenteScelta
+          });
+        }
+      });
+    });
+  });
+  return correzioni;
+}
 
-        // Cerca pattern esistente
-        const idx = state._storicoPatterns.findIndex(p=>
-          (p.piatto_titolare||p.piatto||'').toUpperCase().trim()===piatto &&
-          (p.restrizione||'').trim()===restrizione &&
+// ─── Popup motivazione correzioni ────────────────────────
+let _pendingMotivazioneTable=null;
+let _pendingMotivazioneCorrezioni=[];
+
+function mostraPopupMotivazione(table, correzioni){
+  _pendingMotivazioneTable=table;
+  _pendingMotivazioneCorrezioni=correzioni;
+
+  const body=document.getElementById('motivazioneBody');
+  body.innerHTML=correzioni.map((c,i)=>`
+    <div style="background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);padding:14px">
+      <div style="display:flex;align-items:baseline;gap:8px;margin-bottom:8px;flex-wrap:wrap">
+        <span style="font-weight:600;font-size:13px">${esc(c.piatto)}</span>
+        <span style="background:var(--danger-light);color:var(--danger);padding:1px 8px;border-radius:10px;font-size:11px">${esc(c.restrizione)}</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;font-size:12px;color:var(--text-secondary)">
+        <span style="background:var(--surface3);padding:2px 8px;border-radius:4px;text-decoration:line-through;color:var(--text-muted)">AI: ${esc(c.ai_scelta)}</span>
+        <span>→</span>
+        <span style="background:var(--accent-light);color:var(--accent);padding:2px 8px;border-radius:4px;font-weight:500">${esc(c.utente_scelta)}</span>
+      </div>
+      <div style="font-size:11px;color:var(--text-muted);margin-bottom:5px;text-transform:uppercase;letter-spacing:.06em">Motivazione (opzionale)</div>
+      <input type="text" id="motiv_${i}"
+        placeholder="es. piatto esaurito, già mangiato la settimana scorsa, posizionalmente troppo leggero…"
+        style="width:100%;padding:8px 12px;border:1.5px solid var(--border);border-radius:var(--radius-sm);font-family:'DM Sans',sans-serif;font-size:12px;background:var(--surface);color:var(--text);outline:none"
+        onfocus="this.style.borderColor='var(--accent)'" onblur="this.style.borderColor='var(--border)'"
+        onkeydown="if(event.key==='Enter'&&${i}===${correzioni.length-1})chiudiMotivazioneEApprendi(true)">
+    </div>
+  `).join('');
+
+  document.getElementById('motivazioneOverlay').classList.remove('hidden');
+  // Focus primo campo
+  setTimeout(()=>document.getElementById('motiv_0')?.focus(),80);
+}
+
+function chiudiMotivazioneEApprendi(salva){
+  const overlay=document.getElementById('motivazioneOverlay');
+  overlay.classList.add('hidden');
+
+  if(salva&&_pendingMotivazioneTable){
+    // Raccoglie motivazioni dai campi
+    const correzioniConMotivazione=_pendingMotivazioneCorrezioni.map((c,i)=>{
+      const motiv=document.getElementById(`motiv_${i}`)?.value?.trim()||'';
+      return {...c, motivazione: motiv};
+    });
+    learnFromComanda(_pendingMotivazioneTable, correzioniConMotivazione);
+  } else if(_pendingMotivazioneTable){
+    // Salta: apprendi senza motivazioni
+    learnFromComanda(_pendingMotivazioneTable, _pendingMotivazioneCorrezioni);
+  }
+
+  showToast('💾 Comanda salvata');
+  _pendingMotivazioneTable=null;
+  _pendingMotivazioneCorrezioni=[];
+}
+
+// ─── Apprendimento dalla comanda ──────────────────────────
+// correzioniMotivate: array di {piatto, restrizione, ai_scelta, utente_scelta, motivazione}
+// (può essere vuoto se nessuna correzione o se l'utente ha saltato)
+function learnFromComanda(table, correzioniMotivate=[]){
+  if(!table?.comanda) return;
+  if(!state._storicoPatterns) state._storicoPatterns=[];
+
+  const today=new Date().toISOString().slice(0,10);
+  let changed=false;
+
+  // Mappa correzioni per lookup rapido
+  const corrMap={};
+  correzioniMotivate.forEach(c=>{
+    const k=`${c.piatto}|${c.restrizione}|${c.utente_scelta.toUpperCase()}`;
+    corrMap[k]=c;
+  });
+
+  table.comanda.rows.forEach(row=>{
+    row.cols.forEach((col,ci)=>{
+      if(ci===0||!col.label) return;
+      const reasons=col.reasons||[];
+      reasons.forEach(reason=>{
+        if(!reason.restrizione) return;
+        const piatto=row.nome.toUpperCase().trim();
+        const restrizione=reason.restrizione;
+        const aiScelta=(reason.sostituto||reason.nota||col.label).trim();
+        const utenteScelta=col.label.trim();
+        const isModified=aiScelta&&utenteScelta.toUpperCase()!==aiScelta.toUpperCase();
+
+        // Trova pattern esistente per la scelta UTENTE
+        const idx=state._storicoPatterns.findIndex(p=>
+          (p.piatto_titolare||p.piatto||'').toUpperCase().trim()===piatto&&
+          (p.restrizione||'').trim()===restrizione&&
           (p.alternativa||'').trim().toUpperCase()===utenteScelta.toUpperCase()
         );
 
-        const isModified = aiScelta.toUpperCase().trim() !== utenteScelta.toUpperCase();
+        const corrKey=`${piatto}|${restrizione}|${utenteScelta.toUpperCase()}`;
+        const motivazione=corrMap[corrKey]?.motivazione||'';
 
         if(idx>=0){
-          // Pattern già esiste — aggiorna contatori
-          const p = state._storicoPatterns[idx];
+          const p=state._storicoPatterns[idx];
           if(isModified){
             p.corretto=(p.corretto||0)+1;
             if(!p.correzioni) p.correzioni=[];
-            p.correzioni.push({ai_scelta:aiScelta, utente_scelta:utenteScelta, data:today});
+            p.correzioni.push({
+              ai_scelta: aiScelta,
+              utente_scelta: utenteScelta,
+              motivazione,
+              data: today
+            });
           } else {
             p.conforme=(p.conforme||0)+1;
           }
@@ -1522,10 +1631,10 @@ function learnFromComanda(table){
           p.totale_occorrenze=(p.totale_occorrenze||1)+1;
           changed=true;
         } else {
-          // Nuovo pattern dalla comanda
-          const newPat = {
+          // Nuovo pattern
+          state._storicoPatterns.push({
             piatto_titolare: piatto,
-            restrizione: restrizione,
+            restrizione,
             alternativa: utenteScelta,
             data: today,
             source: 'comanda',
@@ -1533,18 +1642,15 @@ function learnFromComanda(table){
             totale_occorrenze: 1,
             conforme: isModified?0:1,
             corretto: isModified?1:0,
-            correzioni: isModified?[{ai_scelta:aiScelta, utente_scelta:utenteScelta, data:today}]:[]
-          };
-          state._storicoPatterns.push(newPat);
+            correzioni: isModified?[{ai_scelta:aiScelta, utente_scelta:utenteScelta, motivazione, data:today}]:[]
+          });
           changed=true;
         }
       });
     });
   });
 
-  if(changed){
-    fbSaveStorico();
-  }
+  if(changed) fbSaveStorico();
 }
 
 function stampaComanda(){
@@ -1666,14 +1772,20 @@ document.getElementById('btnInviaMenu').addEventListener('click',inviaMenuEmail)
 document.getElementById('btnToggleEditComanda').addEventListener('click',()=>{
   state.comandaEditMode=!state.comandaEditMode;
   if(!state.comandaEditMode){
-    // Save on exit
     const table=getTables().find(t=>t.id===state.comandaTableId);
     if(table){
       table.comanda.nota=document.getElementById('comandaNotaInput').value.trim();
       setTables(getTables());
-      // Apprendi dalla comanda salvata
-      learnFromComanda(table);
-      showToast('💾 Comanda salvata');
+      // Rileva correzioni rispetto all'AI originale
+      const correzioni=rilevaCorrezioni(table);
+      if(correzioni.length>0){
+        // Mostra popup motivazione
+        mostraPopupMotivazione(table, correzioni);
+      } else {
+        // Nessuna correzione: apprendi comunque le conferme
+        learnFromComanda(table,[]);
+        showToast('💾 Comanda salvata');
+      }
     }
   }
   const table=getTables().find(t=>t.id===state.comandaTableId);
@@ -1881,12 +1993,12 @@ function closeDishModal(){document.getElementById('modalPiatto').classList.add('
 
 // ─ Ingredient autocomplete ─
 let _ingAutocompleteTarget=null;
-function showIngSuggestions(inp,ci){
+function showIngSuggestions(inp,ci,cvi){
   hideIngSuggestions();
   const val=inp.value.trim();
   const suggestions=getIngredientSuggestions(val);
   if(!suggestions.length)return;
-  _ingAutocompleteTarget={inp,ci};
+  _ingAutocompleteTarget={inp,ci,cvi};
   const box=document.createElement('div');
   box.id='ingAutocomplete';
   box.style.cssText='position:absolute;z-index:999;background:var(--surface);border:1.5px solid var(--accent);border-radius:var(--radius-sm);box-shadow:var(--shadow-md);min-width:160px;overflow:hidden';
@@ -1896,7 +2008,24 @@ function showIngSuggestions(inp,ci){
     item.style.cssText='padding:6px 12px;font-size:12px;cursor:pointer;color:var(--text)';
     item.addEventListener('mouseenter',()=>item.style.background='var(--accent-light)');
     item.addEventListener('mouseleave',()=>item.style.background='');
-    item.addEventListener('mousedown',e=>{e.preventDefault();inp.value=s;addIngredient(ci,s);inp.value='';hideIngSuggestions();});
+    item.addEventListener('mousedown',e=>{
+      e.preventDefault();
+      inp.value=s;
+      if(cvi!==undefined){
+        // Variante componente
+        if(!state.dishComponents[ci].compVariants[cvi].ingredients)state.dishComponents[ci].compVariants[cvi].ingredients=[];
+        state.dishComponents[ci].compVariants[cvi].ingredients.push({nome:s,flags:[],removability:'fondamentale'});
+        rememberIngredient(s);
+        inp.value='';
+        hideIngSuggestions();
+        renderComponentsList();
+      } else {
+        // Componente normale
+        addIngredient(ci,s);
+        inp.value='';
+        hideIngSuggestions();
+      }
+    });
     box.appendChild(item);
   });
   const rect=inp.getBoundingClientRect();
@@ -1935,6 +2064,8 @@ function renderComponentsList(){
     inp.addEventListener('input',()=>{state.dishComponents[+inp.dataset.ci].compVariants[+inp.dataset.cvi].etichetta=inp.value;});
   });
   list.querySelectorAll('.comp-variant-ing-input').forEach(inp=>{
+    inp.addEventListener('input',()=>showIngSuggestions(inp,+inp.dataset.ci,+inp.dataset.cvi));
+    inp.addEventListener('blur',()=>setTimeout(hideIngSuggestions,150));
     inp.addEventListener('keydown',e=>{
       if(e.key==='Enter'||e.key===','){
         e.preventDefault();
@@ -1945,6 +2076,7 @@ function renderComponentsList(){
         state.dishComponents[ci].compVariants[cvi].ingredients.push({nome:val,flags:[],removability:'fondamentale'});
         rememberIngredient(val);
         inp.value='';
+        hideIngSuggestions();
         renderComponentsList();
       }
     });
@@ -2526,28 +2658,67 @@ function renderStoricoPage(){
         <div style="display:grid;grid-template-columns:1fr 1fr 1fr auto;gap:10px;align-items:end">
           <div>
             <div style="font-size:11px;text-transform:uppercase;letter-spacing:.07em;color:var(--text-muted);margin-bottom:4px">Piatto titolare</div>
-            <input id="manualPiatto" type="text" placeholder="es. NOODLES" list="manualPiattoList"
-              style="width:100%;padding:8px 12px;border:1.5px solid var(--border);border-radius:var(--radius-sm);font-family:'DM Sans',sans-serif;font-size:13px;background:var(--bg);color:var(--text);outline:none"
-              onfocus="this.style.borderColor='var(--accent)'" onblur="this.style.borderColor='var(--border)'">
-            <datalist id="manualPiattoList">
-              ${[...new Set((state._storicoPatterns||[]).map(p=>(p.piatto_titolare||p.piatto||'').trim()).filter(Boolean))].sort().map(p=>`<option value="${esc(p)}">`).join('')}
-            </datalist>
-          </div>
-          <div>
-            <div style="font-size:11px;text-transform:uppercase;letter-spacing:.07em;color:var(--text-muted);margin-bottom:4px">Restrizione</div>
-            <select id="manualRestrizione"
+            <select id="manualPiatto"
               style="width:100%;padding:8px 12px;border:1.5px solid var(--border);border-radius:var(--radius-sm);font-family:'DM Sans',sans-serif;font-size:13px;background:var(--bg);color:var(--text);outline:none"
               onfocus="this.style.borderColor='var(--accent)'" onblur="this.style.borderColor='var(--border)'">
               <option value="">— seleziona —</option>
-              ${['vegetariano','vegano','no glutine','no lattosio','no carne','no pesce','no molluschi','no crostacei','no uova','no interiora','no crudo','no funghi','no tartufo','no frutta secca','no formaggio','no maiale','no aglio','no lattosio','no piccante','no alcool'].map(r=>`<option value="${r}">${r}</option>`).join('')}
+              ${(()=>{
+                const menus=state.menus||{};
+                const allDishes=[
+                  ...(menus['riflesso-titolare']||[]),
+                  ...(menus['riflesso-secondario']||[]),
+                  ...(menus['riflessioni-titolare']||[]),
+                  ...(menus['riflessioni-secondario']||[]),
+                  ...(menus['archivedDishes']||state.archivedDishes||[])
+                ];
+                const names=[...new Set(allDishes.map(d=>(d.nomeComanda||d.nome||'').trim().toUpperCase()).filter(Boolean))].sort();
+                // Aggiungi anche i piatti già presenti nei pattern storici che non sono nel menu attuale
+                const fromPatterns=[...new Set((state._storicoPatterns||[]).map(p=>(p.piatto_titolare||p.piatto||'').trim()).filter(Boolean))];
+                const allNames=[...new Set([...names,...fromPatterns])].sort();
+                return allNames.map(n=>`<option value="${esc(n)}">${esc(n)}</option>`).join('');
+              })()}
             </select>
           </div>
           <div>
-            <div style="font-size:11px;text-transform:uppercase;letter-spacing:.07em;color:var(--text-muted);margin-bottom:4px">Alternativa</div>
-            <input id="manualAlternativa" type="text" placeholder="es. Carciofo"
+            <div style="font-size:11px;text-transform:uppercase;letter-spacing:.07em;color:var(--text-muted);margin-bottom:4px">Restrizione</div>
+            <select id="manualRestrizione" onchange="toggleAltroRestrizione()"
               style="width:100%;padding:8px 12px;border:1.5px solid var(--border);border-radius:var(--radius-sm);font-family:'DM Sans',sans-serif;font-size:13px;background:var(--bg);color:var(--text);outline:none"
-              onfocus="this.style.borderColor='var(--accent)'" onblur="this.style.borderColor='var(--border)'"
-              onkeydown="if(event.key==='Enter')aggiungiPatternManuale()">
+              onfocus="this.style.borderColor='var(--accent)'" onblur="this.style.borderColor='var(--border)'">
+              <option value="">— seleziona —</option>
+              ${['vegetariano','vegano','no glutine','no lattosio','no carne','no pesce','no molluschi','no crostacei','no uova','no interiora','no crudo','no funghi','no tartufo','no frutta secca','no formaggio','no maiale','no aglio','no piccante','no alcool','altro…'].map(r=>`<option value="${r}">${r}</option>`).join('')}
+            </select>
+            <input id="manualRestrizioneAltro" type="text" placeholder="specifica restrizione…"
+              style="display:none;margin-top:6px;width:100%;padding:8px 12px;border:1.5px solid var(--border);border-radius:var(--radius-sm);font-family:'DM Sans',sans-serif;font-size:13px;background:var(--bg);color:var(--text);outline:none"
+              onfocus="this.style.borderColor='var(--accent)'" onblur="this.style.borderColor='var(--border)'">
+          </div>
+          <div>
+            <div style="font-size:11px;text-transform:uppercase;letter-spacing:.07em;color:var(--text-muted);margin-bottom:4px">Alternativa</div>
+            <select id="manualAlternativa"
+              style="width:100%;padding:8px 12px;border:1.5px solid var(--border);border-radius:var(--radius-sm);font-family:'DM Sans',sans-serif;font-size:13px;background:var(--bg);color:var(--text);outline:none"
+              onfocus="this.style.borderColor='var(--accent)'" onblur="this.style.borderColor='var(--border)'">
+              <option value="">— seleziona —</option>
+              ${(()=>{
+                const menus=state.menus||{};
+                // Secondari prima (sono le alternative più probabili), poi tutti
+                const secondari=[
+                  ...(menus['riflesso-secondario']||[]),
+                  ...(menus['riflessioni-secondario']||[])
+                ];
+                const titolari=[
+                  ...(menus['riflesso-titolare']||[]),
+                  ...(menus['riflessioni-titolare']||[])
+                ];
+                const archiviati=menus['archivedDishes']||state.archivedDishes||[];
+                const toOption=d=>{
+                  const n=(d.nomeComanda||d.nome||'').trim();
+                  return n?`<option value="${esc(n)}">${esc(n)}</option>`:'';
+                };
+                let html='<optgroup label="Menu secondario (alternative)">'+secondari.map(toOption).join('')+'</optgroup>';
+                html+='<optgroup label="Menu titolare">'+titolari.map(toOption).join('')+'</optgroup>';
+                if(archiviati.length) html+='<optgroup label="Piatti archiviati">'+archiviati.map(toOption).join('')+'</optgroup>';
+                return html;
+              })()}
+            </select>
           </div>
           <button class="btn btn-primary" onclick="aggiungiPatternManuale()" style="padding:8px 18px;white-space:nowrap">+ Aggiungi</button>
         </div>
@@ -2594,7 +2765,13 @@ function renderStoricoPage(){
                   <span style="color:${(p.corretto||0)>0?'var(--danger)':'var(--text-muted)'};font-weight:${(p.corretto||0)>0?'600':'400'}">${p.corretto||0}</span>
                 </td>
                 <td style="padding:8px 10px;color:var(--text-muted);font-size:11px">
-                  ${lastCorr?`<span title="AI: ${esc(lastCorr.ai_scelta||'')} → Utente: ${esc(lastCorr.utente_scelta||'')}">✏️ ${esc(lastCorr.utente_scelta||'')} <span style="color:var(--text-muted)">(${lastCorr.data||''})</span></span>`:'—'}
+                  ${lastCorr
+                    ? `<span title="AI: ${esc(lastCorr.ai_scelta||'')} → Utente: ${esc(lastCorr.utente_scelta||'')}${lastCorr.motivazione?' — '+lastCorr.motivazione:''}">
+                        ✏️ ${esc(lastCorr.utente_scelta||'')}
+                        ${lastCorr.motivazione?`<span style="color:var(--gold);font-style:italic"> "${esc(lastCorr.motivazione)}"</span>`:''}
+                        <span style="color:var(--text-muted)">(${lastCorr.data||''})</span>
+                       </span>`
+                    : '—'}
                 </td>
                 <td style="padding:8px 4px;text-align:center">
                   <button onclick="eliminaPattern(${globalIdx})" title="Elimina"
@@ -2606,35 +2783,6 @@ function renderStoricoPage(){
           </tbody>
         </table>
       </div>`:''}
-
-      <!-- Import area -->
-      <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:20px;box-shadow:var(--shadow-sm);margin-bottom:20px">
-        <div style="font-size:14px;font-weight:500;margin-bottom:8px">📤 Importa file Excel storico</div>
-        <div class="form-hint" style="margin-bottom:14px">Trascina o seleziona un file Excel comande (stesso formato del file serata). Il sistema estrae automaticamente i pattern restrizione→alternativa.</div>
-        <div style="border:2px dashed var(--border);border-radius:var(--radius);padding:24px;text-align:center;cursor:pointer;transition:all .15s" id="dropZone"
-          ondragover="event.preventDefault();this.style.borderColor='var(--accent)';this.style.background='var(--accent-light)'"
-          ondragleave="this.style.borderColor='var(--border)';this.style.background=''"
-          ondrop="event.preventDefault();this.style.borderColor='var(--border)';this.style.background='';handleStoricoFiles(event.dataTransfer.items||event.dataTransfer.files)">
-          <div style="font-size:28px;margin-bottom:8px">📂</div>
-          <div style="font-size:13px;font-weight:500">Trascina file o cartelle Excel qui</div>
-          <div style="font-size:11px;color:var(--text-muted);margin-top:4px">Oppure seleziona:</div>
-          <div style="display:flex;gap:8px;justify-content:center;margin-top:10px;flex-wrap:wrap">
-            <button class="btn btn-ghost btn-sm" onclick="document.getElementById('storicoFileInput').click()">📄 File singoli</button>
-            <button class="btn btn-ghost btn-sm" onclick="document.getElementById('storicoDirInput').click()">📁 Cartella intera</button>
-          </div>
-        </div>
-        <input type="file" id="storicoFileInput" accept=".xlsx" multiple style="display:none" onchange="handleStoricoFiles(this.files)">
-        <input type="file" id="storicoDirInput" accept=".xlsx" multiple webkitdirectory style="display:none" onchange="handleStoricoFiles(this.files)">
-        <div id="importProgress" style="margin-top:12px;display:none">
-          <div style="height:6px;background:var(--border);border-radius:3px;overflow:hidden">
-            <div id="importBar" style="height:100%;background:var(--accent);width:0%;transition:width .3s"></div>
-          </div>
-          <div style="display:flex;align-items:center;gap:10px;margin-top:6px">
-            <div id="importMsg" style="font-size:12px;color:var(--text-muted);flex:1"></div>
-            <button class="btn btn-danger btn-xs" id="btnAnnullaImport" onclick="annullaImport()">✕ Annulla</button>
-          </div>
-        </div>
-      </div>
 
       <!-- Search + Pattern table -->
       ${patternCount>0?`
@@ -2659,17 +2807,36 @@ function renderStoricoPage(){
               onmouseout="if('${r}'!==_storicoSearch)this.style.borderColor='var(--border)'">${r}</button>`).join('')}
         </div>
         <div id="storicoTableContainer"></div>
-      </div>`:'<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:40px;text-align:center;color:var(--text-muted)">Nessun pattern ancora caricato. Importa file Excel o usa i file <code>carica_storico_*.html</code>.</div>'}
+      </div>`:'<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:40px;text-align:center;color:var(--text-muted)">Nessun pattern ancora caricato. Usa il form qui sopra per aggiungere i primi pattern manuali.</div>'}
     </div>`;
 
   if(patternCount>0) renderStoricoTable();
 }
 
+function toggleAltroRestrizione(){
+  const sel=document.getElementById('manualRestrizione');
+  const inp=document.getElementById('manualRestrizioneAltro');
+  if(!sel||!inp) return;
+  if(sel.value==='altro…'){
+    inp.style.display='block';
+    inp.focus();
+  } else {
+    inp.style.display='none';
+    inp.value='';
+  }
+}
+
 async function aggiungiPatternManuale(){
-  const piatto = document.getElementById('manualPiatto').value.trim().toUpperCase();
-  const restrizione = document.getElementById('manualRestrizione').value.trim();
-  const alternativa = document.getElementById('manualAlternativa').value.trim();
-  const msg = document.getElementById('manualPatternMsg');
+  const piattoEl=document.getElementById('manualPiatto');
+  const restEl=document.getElementById('manualRestrizione');
+  const restAltroEl=document.getElementById('manualRestrizioneAltro');
+  const altEl=document.getElementById('manualAlternativa');
+  const msg=document.getElementById('manualPatternMsg');
+
+  const piatto=(piattoEl?.value||'').trim().toUpperCase();
+  const restSel=(restEl?.value||'').trim();
+  const restrizione=restSel==='altro…'?(restAltroEl?.value||'').trim():restSel;
+  const alternativa=(altEl?.value||'').trim();
 
   if(!piatto||!restrizione||!alternativa){
     msg.style.color='var(--danger)';
@@ -2708,9 +2875,10 @@ async function aggiungiPatternManuale(){
   await fbSaveStorico();
 
   // Reset form
-  document.getElementById('manualPiatto').value='';
-  document.getElementById('manualRestrizione').value='';
-  document.getElementById('manualAlternativa').value='';
+  if(document.getElementById('manualPiatto')) document.getElementById('manualPiatto').value='';
+  if(document.getElementById('manualRestrizione')) document.getElementById('manualRestrizione').value='';
+  if(document.getElementById('manualRestrizioneAltro')){document.getElementById('manualRestrizioneAltro').value='';document.getElementById('manualRestrizioneAltro').style.display='none';}
+  if(document.getElementById('manualAlternativa')) document.getElementById('manualAlternativa').value='';
   msg.style.color='var(--accent)';
   msg.textContent=`✓ Pattern aggiunto: ${piatto} | ${restrizione} → ${alternativa}`;
   setTimeout(()=>{if(msg)msg.textContent='';},3000);
@@ -2831,216 +2999,6 @@ async function eliminaPattern(globalIndex){
   document.getElementById('statPatterns').textContent=state._storicoPatterns.length;
 }
 
-// Recursively extract all .xlsx files from dropped items (supports folders)
-async function collectXlsxFiles(items){
-  const files=[];
-
-  async function readAllEntries(reader){
-    // readEntries returns max 100 at a time — must loop until empty
-    const all=[];
-    while(true){
-      const batch=await new Promise((res,rej)=>reader.readEntries(res,rej));
-      if(!batch.length) break;
-      all.push(...batch);
-    }
-    return all;
-  }
-
-  async function traverse(entry){
-    if(!entry) return;
-    if(entry.isFile){
-      if(entry.name.endsWith('.xlsx')&&!entry.name.startsWith('~$')){
-        const f=await new Promise((res,rej)=>entry.file(res,rej));
-        files.push(f);
-      }
-    } else if(entry.isDirectory){
-      const reader=entry.createReader();
-      const entries=await readAllEntries(reader);
-      for(const e of entries) await traverse(e);
-    }
-  }
-
-  if(items instanceof FileList){
-    // From <input webkitdirectory> or multiple file select
-    for(const f of items){
-      if(f.name.endsWith('.xlsx')&&!f.name.startsWith('~$')) files.push(f);
-    }
-  } else {
-    // From drag & drop DataTransferItemList
-    const entries=[];
-    for(const item of items){
-      const entry=item.webkitGetAsEntry?.();
-      if(entry) entries.push(entry);
-      else if(item.getAsFile){
-        const f=item.getAsFile();
-        if(f?.name.endsWith('.xlsx')&&!f.name.startsWith('~$')) files.push(f);
-      }
-    }
-    for(const entry of entries) await traverse(entry);
-  }
-
-  return files;
-}
-
-let _importAborted=false;
-function annullaImport(){
-  _importAborted=true;
-  const msg=document.getElementById('importMsg');
-  const bar=document.getElementById('importBar');
-  if(msg)msg.textContent='⏹ Importazione annullata';
-  if(bar)bar.style.background='var(--danger)';
-  setTimeout(()=>{
-    document.getElementById('importProgress').style.display='none';
-    _importAborted=false;
-  },2000);
-}
-
-async function handleStoricoFiles(items){
-  document.getElementById('importProgress').style.display='block';
-  const bar=document.getElementById('importBar');
-  const msg=document.getElementById('importMsg');
-  bar.style.background='var(--accent)';
-  bar.style.width='3%';
-  msg.textContent='Raccolta file in corso...';
-
-  // Update count while collecting
-  const countInterval=setInterval(()=>{
-    msg.textContent=`Raccolta file... trovati finora: controllando sottocartelle`;
-  },500);
-
-  const files=await collectXlsxFiles(items);
-  clearInterval(countInterval);
-
-  if(!files.length){
-    msg.textContent='⚠️ Nessun file .xlsx trovato';
-    bar.style.width='100%';
-    bar.style.background='var(--danger)';
-    return;
-  }
-
-  bar.style.width='5%';
-  msg.textContent=`Trovati ${files.length} file .xlsx — avvio elaborazione...`;
-
-  msg.textContent=`Trovati ${files.length} file — avvio elaborazione...`;
-  
-  if(!state._storicoPatterns)state._storicoPatterns=[];
-  if(!state._storicoSerate)state._storicoSerate=[];
-
-  let totalNewPatterns=0;
-  let processed=0;
-  let errors=0;
-
-  _importAborted=false;
-  let startTime=Date.now();
-  let batchTexts=[];
-
-  for(const file of files){
-    if(_importAborted)break;
-    processed++;
-
-    // Update progress + ETA
-    const pct=Math.round((processed/files.length)*85)+5;
-    bar.style.width=pct+'%';
-    const elapsed=(Date.now()-startTime)/1000;
-    const avgSec=elapsed/processed;
-    const remaining=Math.round(avgSec*(files.length-processed));
-    const etaStr=processed>1?(remaining>60?`~${Math.round(remaining/60)} min`:`~${remaining} sec`):'';
-    msg.textContent=`${processed}/${files.length} — ${file.name}${etaStr?' · rimangono '+etaStr:''}`;
-
-    // 1. Extract text from Excel with SheetJS
-    let fileText='';
-    try{
-      const XLSX=window.XLSX;
-      if(!XLSX)throw new Error('SheetJS non caricato');
-      const wb=XLSX.read(await file.arrayBuffer(),{type:'array'});
-      for(const sn of wb.SheetNames){
-        const upper=sn.toUpperCase();
-        const isRelevant=upper.includes('MENU')||upper.includes('ALT')||upper.includes('RIFL')||!isNaN(sn.trim());
-        if(!isRelevant) continue;
-        const rows=XLSX.utils.sheet_to_json(wb.Sheets[sn],{header:1,defval:''});
-        const nonEmpty=rows.filter(r=>r.some(c=>String(c).trim())).slice(0,40);
-        if(nonEmpty.length>1){
-          fileText+=`\n-- ${file.name} | ${sn} --\n`;
-          fileText+=nonEmpty.map(r=>r.map(c=>String(c).trim()).join('\t')).join('\n');
-        }
-      }
-    }catch(e){
-      console.error('SheetJS error',file.name,e);
-      errors++;
-    }
-
-    if(fileText) batchTexts.push(fileText);
-    state._storicoSerate.push({file:file.name});
-
-    // 2. Process batch every 10 files or at the last file
-    const isLast=processed===files.length||_importAborted;
-    if((batchTexts.length>=10||isLast)&&batchTexts.length>0){
-      msg.textContent=`${processed}/${files.length} — analisi batch di ${batchTexts.length} file...`;
-      try{
-        const batchContent=batchTexts.join('\n\n===PROSSIMO FILE===\n\n').slice(0,12000);
-        const resp=await fetch('https://api.anthropic.com/v1/messages',{
-          method:'POST',
-          headers:{'Content-Type':'application/json'},
-          body:JSON.stringify({
-            model:'claude-sonnet-4-20250514',
-            max_tokens:4000,
-            messages:[{role:'user',content:[{type:'text',text:`Dati di comande ristorante fine dining da file Excel.
-Cerca in ogni file:
-1. Foglio "MENU' RIFLESSO E ALTERNATIVE": tabella piatto→alternativa per ogni restrizione
-2. Fogli tavolo numerati: restrizioni ospiti e alternative servite
-
-Normalizza restrizioni: "no pesce", "vegetariano", "no glutine", "no lattosio", "no carne", "no crostacei", "no molluschi", "no uova", "vegano", "incinta".
-
-DATI:
-${batchContent}
-
-Rispondi SOLO JSON:
-{"pattern_sostituzione":[{"piatto_titolare":"...","restrizione":"...","alternativa":"..."}]}`}]}]
-          })
-        });
-        const data=await resp.json();
-        const raw=data.content?.[0]?.text||'{}';
-        let parsed={};
-        try{parsed=JSON.parse(raw.replace(/```json|```/g,'').trim());}catch(e){}
-        (parsed.pattern_sostituzione||[]).forEach(p=>{
-          if(!p.piatto_titolare||!p.alternativa)return;
-          const dup=state._storicoPatterns.find(x=>x.piatto_titolare===p.piatto_titolare&&x.restrizione===p.restrizione&&x.alternativa===p.alternativa);
-          if(!dup){state._storicoPatterns.push(p);totalNewPatterns++;}
-        });
-      }catch(e){console.error('Batch API error',e);errors++;}
-
-      batchTexts=[];
-
-      // Checkpoint save
-      await db.collection('config').doc('storico').set({
-        patterns:state._storicoPatterns,
-        serate:state._storicoSerate,
-        aggiornato:new Date().toISOString()
-      });
-    }
-  }
-
-  // Save all to Firestore
-  bar.style.width='95%';
-  msg.textContent='Salvataggio su Firestore...';
-  await db.collection('config').doc('storico').set({
-    patterns: state._storicoPatterns,
-    serate: state._storicoSerate,
-    aggiornato: new Date().toISOString()
-  });
-
-  bar.style.width='100%';
-  const errMsg=errors?` (${errors} errori)`:'';
-  msg.textContent=`✅ Completato: ${processed} file, ${totalNewPatterns} nuovi pattern${errMsg}`;
-
-  setTimeout(()=>{
-    document.getElementById('importProgress').style.display='none';
-    renderStoricoPage();
-  },3000);
-
-  showToast(`✅ ${totalNewPatterns} nuovi pattern da ${processed} file`);
-}
-
 // Build RAG context for AI prompt from stored patterns
 function buildRAGContext(){
   if(!state._storicoPatterns?.length) return '';
@@ -3063,7 +3021,11 @@ function buildRAGContext(){
     const lastCorr = (p.correzioni||[]).slice(-1)[0];
     let line = `- ${(p.piatto_titolare||p.piatto||'').trim()} | ${(p.restrizione||'').replace(/_/g,' ')} → in passato: ${(p.alternativa||'').trim()}`;
     if(freq>1||conf>0) line += ` (usato ${freq}x, confermato ${conf}x)`;
-    if(corr>0&&lastCorr) line += ` [corretto ${corr}x → utente preferisce: ${lastCorr.utente_scelta}]`;
+    if(corr>0&&lastCorr){
+      line += ` [corretto ${corr}x → utente preferisce: ${lastCorr.utente_scelta}`;
+      if(lastCorr.motivazione) line += ` — motivazione: "${lastCorr.motivazione}"`;
+      line += `]`;
+    }
     return line;
   }).join('\n');
   return ctx;
