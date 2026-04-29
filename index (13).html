@@ -2258,7 +2258,51 @@ function addIngredient(ci,nome){
   if(typeof fbSaveTagsDebounced==='function')fbSaveTagsDebounced();
   renderComponentsList();
 }
-function removeIngredient(ci,ii){state.dishComponents[ci].ingredients.splice(ii,1);renderComponentsList();}
+function isIngredientUsedAnywhere(nome){
+  const n=nome.toLowerCase().trim();
+  // Cerca in tutti i componenti di tutti i piatti di tutti i menu
+  const menus=state.menus||{};
+  for(const key of Object.keys(menus)){
+    for(const dish of (menus[key]||[])){
+      for(const comp of (dish.components||[])){
+        if((comp.ingredients||[]).some(i=>(i.nome||'').toLowerCase().trim()===n)) return true;
+        for(const cv of (comp.compVariants||[])){
+          if((cv.ingredients||[]).some(i=>(i.nome||'').toLowerCase().trim()===n)) return true;
+        }
+      }
+    }
+  }
+  // Cerca anche nei componenti in editing
+  for(const comp of (state.dishComponents||[])){
+    if((comp.ingredients||[]).some(i=>(i.nome||'').toLowerCase().trim()===n)) return true;
+    for(const cv of (comp.compVariants||[])){
+      if((cv.ingredients||[]).some(i=>(i.nome||'').toLowerCase().trim()===n)) return true;
+    }
+  }
+  return false;
+}
+
+function forgetIngredientIfUnused(nome){
+  if(!nome?.trim()) return;
+  const n=nome.toLowerCase().trim();
+  if(!isIngredientUsedAnywhere(n)){
+    ingredientMemory.delete(n);
+    fbSaveTags();
+  }
+}
+
+function forgetIngredientManual(nome){
+  ingredientMemory.delete(nome.toLowerCase().trim());
+  fbSaveTags();
+  showToast(`🗑 "${nome}" rimosso dalla memoria`);
+}
+
+function removeIngredient(ci,ii){
+  const nome=state.dishComponents[ci].ingredients[ii]?.nome;
+  state.dishComponents[ci].ingredients.splice(ii,1);
+  renderComponentsList();
+  if(nome) forgetIngredientIfUnused(nome);
+}
 function cycleIngRem(ci,ii){
   const ing=state.dishComponents[ci].ingredients[ii];
   const curr=ing.removability||'fondamentale';
@@ -2284,8 +2328,10 @@ function addCompVariant(ci){
   renderComponentsList();
 }
 function removeCompVariantIng(ci,cvi,ii){
+  const nome=state.dishComponents[ci].compVariants[cvi].ingredients[ii]?.nome;
   state.dishComponents[ci].compVariants[cvi].ingredients.splice(ii,1);
   renderComponentsList();
+  if(nome) forgetIngredientIfUnused(nome);
 }
 
 function cycleCompVariantIngRem(ci,cvi,ii){
@@ -2502,6 +2548,33 @@ function renderTagsPage(){
               </select>
               <button class="btn btn-danger btn-xs" onclick="removeCustomFlag(${fi});renderTagsPage()">✕</button>
             </div>`).join('')}
+        </div>
+      </div>
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:20px;box-shadow:var(--shadow-sm)">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+          <div>
+            <div style="font-size:13px;font-weight:500">Memoria ingredienti (${ingredientMemory.size})</div>
+            <div class="form-hint" style="margin-top:2px">Voci usate nell'autocomplete durante l'inserimento ingredienti. Rimuovi quelle errate.</div>
+          </div>
+          <input type="text" id="ingMemorySearch" placeholder="Cerca…" class="form-input"
+            style="width:180px;padding:5px 10px;font-size:12px"
+            oninput="renderTagsPage()">
+        </div>
+        <div style="display:flex;flex-wrap:wrap;gap:6px">
+          ${(()=>{
+            const q=(document.getElementById('ingMemorySearch')?.value||'').toLowerCase();
+            const sorted=[...ingredientMemory].sort();
+            const filtered=q?sorted.filter(s=>s.includes(q)):sorted;
+            if(!filtered.length) return '<div style="color:var(--text-muted);font-size:13px;font-style:italic">Nessun ingrediente in memoria</div>';
+            return filtered.map(ing=>`
+              <div style="display:flex;align-items:center;gap:4px;background:var(--bg);border:1px solid var(--border);border-radius:20px;padding:3px 10px 3px 12px;font-size:12px">
+                <span>${esc(ing)}</span>
+                <button onclick="forgetIngredientManual('${esc(ing)}');renderTagsPage()"
+                  style="background:none;border:none;cursor:pointer;color:var(--text-muted);font-size:13px;padding:0 2px;line-height:1;margin-left:2px"
+                  onmouseover="this.style.color='var(--danger)'" onmouseout="this.style.color='var(--text-muted)'"
+                  title="Rimuovi dalla memoria">✕</button>
+              </div>`).join('');
+          })()}
         </div>
       </div>
     </div>`;
